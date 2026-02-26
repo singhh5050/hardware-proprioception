@@ -1,0 +1,724 @@
+"""Hardware specifications, model configurations, and real-world catalogs.
+
+All internal values use base units: bytes, FLOPS/s, bytes/s.
+Conversions (GB, TFLOPS, etc.) happen only at display boundaries.
+
+Last updated: February 2026
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+GB = 1 << 30          # 1 GiB in bytes
+TB = 1 << 40          # 1 TiB in bytes
+TFLOPS = 1e12         # 1 TFLOPS in FLOPS/s
+BYTES_PER_FP16 = 2
+BYTES_PER_INT8 = 1
+
+
+# ---------------------------------------------------------------------------
+# HardwareSpec
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class HardwareSpec:
+    """Specification for a single accelerator (GPU / TPU / SoC).
+
+    All capacities in bytes, all throughputs in bytes/s or FLOPS/s.
+    """
+
+    name: str
+
+    # Memory
+    hbm_capacity: int            # bytes
+    hbm_bandwidth: float         # bytes/s
+    cpu_ram_capacity: int        # bytes (0 for unified-memory devices)
+    cpu_gpu_bandwidth: float     # bytes/s (PCIe / UB / etc.)
+
+    # Compute
+    fp16_flops: float            # FLOPS/s (tensor-core FP16/BF16)
+    int8_flops: float            # FLOPS/s (INT8 tensor ops)
+    fp32_flops: float            # FLOPS/s (FP32 CUDA cores)
+
+    # On-chip SRAM (L2 / scratchpad) — informational
+    sram_capacity: int           # bytes
+
+    # Interconnect (multi-GPU, informational for now)
+    interconnect_bandwidth: float  # bytes/s (NVLink / Infinity Fabric / etc.)
+
+    # Whether memory is unified (Apple, some TPUs)
+    unified_memory: bool = False
+
+    # --- computed properties ---------------------------------------------------
+
+    @property
+    def critical_batch_size_fp16(self) -> float:
+        """Batch size at which MLP transitions from memory-bound to compute-bound.
+
+        B_crit = FP16_FLOPS / HBM_BW  (arithmetic intensity crossover).
+        """
+        return self.fp16_flops / self.hbm_bandwidth
+
+    def to_prompt_string(self) -> str:
+        """Human-readable summary suitable for LLM prompts."""
+        return (
+            f"{self.name}: "
+            f"HBM {self.hbm_capacity / GB:.0f} GB @ {self.hbm_bandwidth / GB:.0f} GB/s, "
+            f"FP16 {self.fp16_flops / TFLOPS:.0f} TFLOPS, "
+            f"INT8 {self.int8_flops / TFLOPS:.0f} TFLOPS, "
+            f"SRAM {self.sram_capacity / (1 << 20):.0f} MB, "
+            f"{'unified' if self.unified_memory else f'CPU {self.cpu_ram_capacity / GB:.0f} GB @ {self.cpu_gpu_bandwidth / GB:.0f} GB/s'}"
+        )
+
+    def to_tensor(self) -> np.ndarray:
+        """Flat float32 feature vector for RL observation space.
+
+        Log-scaled where appropriate so values span similar magnitudes.
+        """
+        return np.array([
+            np.log2(self.hbm_capacity),
+            np.log2(self.hbm_bandwidth),
+            np.log2(self.cpu_ram_capacity + 1),
+            np.log2(self.cpu_gpu_bandwidth + 1),
+            np.log2(self.fp16_flops),
+            np.log2(self.int8_flops),
+            np.log2(self.fp32_flops),
+            np.log2(self.sram_capacity + 1),
+            np.log2(self.interconnect_bandwidth + 1),
+            float(self.unified_memory),
+        ], dtype=np.float32)
+
+
+# ---------------------------------------------------------------------------
+# ModelConfig
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ModelConfig:
+    """Transformer model architecture parameters.
+
+    For MoE models, d_ff is the per-expert FFN intermediate dimension
+    (the dimension actually computed per token per active expert).
+    num_params approximates the *total* parameter count including all
+    experts; param_bytes is total weight size.
+
+    Note on DeepSeek-V3 / MLA: MLA uses low-rank KV compression, so the
+    true KV cache footprint is ~10-30x smaller than standard MHA at the same
+    num_kv_heads would imply. kv_bytes_per_token() will overestimate for
+    MLA models.
+    """
+
+    name: str
+    num_layers: int
+    d_model: int
+    num_heads: int          # query heads
+    num_kv_heads: int       # key/value heads (GQA); equals num_heads for MHA
+    d_ff: int               # FFN intermediate dimension (per-expert for MoE)
+    vocab_size: int
+    head_dim: int | None = None   # defaults to d_model // num_heads
+    bytes_per_param: int = 2      # 2 = bf16/fp16
+    # MoE bookkeeping (optional) ------------------------------------------------
+    num_experts: int = 1          # total routed experts (1 = dense)
+    experts_per_token: int = 1    # active experts per token
+
+    def __post_init__(self) -> None:
+        if self.head_dim is None:
+            object.__setattr__(self, "head_dim", self.d_model // self.num_heads)
+
+    # --- computed properties ---------------------------------------------------
+
+    @property
+    def _head_dim(self) -> int:
+        return self.head_dim if self.head_dim is not None else self.d_model // self.num_heads
+
+    @property
+    def is_moe(self) -> bool:
+        return self.num_experts > 1
+
+    @property
+    def num_params(self) -> int:
+        """Total parameter count (approximate, excludes biases and norms).
+
+        For MoE models this includes all expert weights (not just active ones).
+        Approximate: treats all layers as having num_experts FFN blocks, which
+        overcounts for architectures with mixed dense/MoE layers (e.g. Maverick).
+        """
+        attn_per_layer = self.attn_params_per_layer
+        mlp_per_layer = self.mlp_params_per_layer * self.num_experts
+        per_layer = attn_per_layer + mlp_per_layer
+        embedding = self.vocab_size * self.d_model  # often tied
+        return per_layer * self.num_layers + embedding
+
+    @property
+    def params_per_layer(self) -> int:
+        """Active parameters per transformer layer (attention + one FFN path)."""
+        return self.attn_params_per_layer + self.mlp_params_per_layer
+
+    @property
+    def attn_params_per_layer(self) -> int:
+        """Attention projection parameters per layer.
+
+        Q: d_model * num_heads * head_dim
+        K: d_model * num_kv_heads * head_dim
+        V: d_model * num_kv_heads * head_dim
+        O: num_heads * head_dim * d_model
+        """
+        h = self._head_dim
+        q_params = self.d_model * self.num_heads * h
+        k_params = self.d_model * self.num_kv_heads * h
+        v_params = self.d_model * self.num_kv_heads * h
+        o_params = self.num_heads * h * self.d_model
+        return q_params + k_params + v_params + o_params
+
+    @property
+    def mlp_params_per_layer(self) -> int:
+        """MLP (FFN) parameters per layer (single expert / dense path).
+
+        SwiGLU: 3 * d_model * d_ff  (gate + up + down)
+        Used by all modern LLMs in this catalog.
+        """
+        return 3 * self.d_model * self.d_ff
+
+    @property
+    def param_bytes(self) -> int:
+        """Total model size in bytes (all weights including all MoE experts)."""
+        return self.num_params * self.bytes_per_param
+
+    @property
+    def kv_bytes_per_token(self) -> int:
+        """KV cache bytes per token (full precision, all layers).
+
+        Per layer: 2 (K+V) * num_kv_heads * head_dim * bytes_per_param
+        Total:     num_layers * per_layer
+
+        NOTE: Overestimates for MLA-based models (DeepSeek-V3/R1) which
+        cache a compressed latent representation instead of full KV.
+        """
+        per_layer = 2 * self.num_kv_heads * self._head_dim * self.bytes_per_param
+        return per_layer * self.num_layers
+
+    def kv_bytes_per_token_per_layer(self) -> int:
+        """KV cache bytes per token for a single layer."""
+        return 2 * self.num_kv_heads * self._head_dim * self.bytes_per_param
+
+    def kv_cache_bytes(self, seq_len: int) -> int:
+        """Total KV cache size for a given sequence length."""
+        return self.kv_bytes_per_token * seq_len
+
+
+# ---------------------------------------------------------------------------
+# Hardware catalog — real accelerators (as of Feb 2026)
+# All FP16/INT8 values are dense (no 2:4 sparsity) unless noted.
+# ---------------------------------------------------------------------------
+def get_hardware_specs() -> dict[str, HardwareSpec]:
+    """Return a catalog of real hardware specs keyed by name."""
+    specs = {}
+
+    # --- NVIDIA ----------------------------------------------------------------
+
+    specs["A100_80GB"] = HardwareSpec(
+        name="A100_80GB",
+        hbm_capacity=80 * GB,
+        hbm_bandwidth=2.0 * TB,       # 2039 GB/s HBM2e
+        cpu_ram_capacity=512 * GB,
+        cpu_gpu_bandwidth=64 * GB,     # PCIe Gen4 x16
+        fp16_flops=312 * TFLOPS,
+        int8_flops=624 * TFLOPS,
+        fp32_flops=19.5 * TFLOPS,
+        sram_capacity=40 * (1 << 20),  # 40 MB L2
+        interconnect_bandwidth=600 * GB,  # NVLink 3
+    )
+
+    specs["H100_SXM"] = HardwareSpec(
+        name="H100_SXM",
+        hbm_capacity=80 * GB,
+        hbm_bandwidth=3.35 * TB,       # 3350 GB/s HBM3
+        cpu_ram_capacity=512 * GB,
+        cpu_gpu_bandwidth=128 * GB,    # PCIe Gen5 x16
+        fp16_flops=990 * TFLOPS,
+        int8_flops=1979 * TFLOPS,
+        fp32_flops=67 * TFLOPS,
+        sram_capacity=50 * (1 << 20),  # 50 MB L2
+        interconnect_bandwidth=900 * GB,  # NVLink 4
+    )
+
+    specs["H200"] = HardwareSpec(
+        name="H200",
+        hbm_capacity=141 * GB,
+        hbm_bandwidth=4.8 * TB,        # 4800 GB/s HBM3e
+        cpu_ram_capacity=512 * GB,
+        cpu_gpu_bandwidth=128 * GB,
+        fp16_flops=990 * TFLOPS,       # same Hopper die as H100
+        int8_flops=1979 * TFLOPS,
+        fp32_flops=67 * TFLOPS,
+        sram_capacity=50 * (1 << 20),
+        interconnect_bandwidth=900 * GB,
+    )
+
+    specs["B200"] = HardwareSpec(
+        name="B200",
+        hbm_capacity=192 * GB,
+        hbm_bandwidth=8.0 * TB,        # 8000 GB/s HBM3e
+        cpu_ram_capacity=512 * GB,
+        cpu_gpu_bandwidth=128 * GB,
+        fp16_flops=2250 * TFLOPS,      # 5th-gen Tensor Cores, FP16/BF16
+        int8_flops=4500 * TFLOPS,
+        fp32_flops=80 * TFLOPS,
+        sram_capacity=126 * (1 << 20), # 126 MB L2
+        interconnect_bandwidth=1800 * GB,  # NVLink 5
+    )
+
+    specs["B300"] = HardwareSpec(
+        name="B300",
+        hbm_capacity=288 * GB,         # HBM3e 12-high stacks
+        hbm_bandwidth=8.0 * TB,        # 8000 GB/s
+        cpu_ram_capacity=512 * GB,
+        cpu_gpu_bandwidth=128 * GB,    # PCIe Gen5 x16
+        fp16_flops=2500 * TFLOPS,
+        int8_flops=5000 * TFLOPS,
+        fp32_flops=75 * TFLOPS,
+        sram_capacity=126 * (1 << 20),
+        interconnect_bandwidth=1800 * GB,  # NVLink 5
+    )
+
+    specs["L40S"] = HardwareSpec(
+        name="L40S",
+        hbm_capacity=48 * GB,
+        hbm_bandwidth=864 * GB,        # 864 GB/s GDDR6
+        cpu_ram_capacity=256 * GB,
+        cpu_gpu_bandwidth=64 * GB,
+        fp16_flops=362 * TFLOPS,
+        int8_flops=733 * TFLOPS,
+        fp32_flops=91.6 * TFLOPS,
+        sram_capacity=96 * (1 << 20),  # 96 MB L2
+        interconnect_bandwidth=0,       # no NVLink on L40S
+    )
+
+    specs["RTX_5090"] = HardwareSpec(
+        name="RTX_5090",
+        hbm_capacity=32 * GB,          # 32 GB GDDR7
+        hbm_bandwidth=1.79 * TB,       # 1792 GB/s
+        cpu_ram_capacity=192 * GB,
+        cpu_gpu_bandwidth=64 * GB,     # PCIe Gen5 x16
+        fp16_flops=209.5 * TFLOPS,    # FP16/BF16 dense tensor (5th-gen)
+        int8_flops=838 * TFLOPS,      # INT8 dense tensor
+        fp32_flops=104.8 * TFLOPS,    # FP32 shader (CUDA cores)
+        sram_capacity=96 * (1 << 20),  # 96 MB L2
+        interconnect_bandwidth=0,       # no NVLink on consumer cards
+    )
+
+    # --- AMD ------------------------------------------------------------------
+
+    specs["MI300X"] = HardwareSpec(
+        name="MI300X",
+        hbm_capacity=192 * GB,
+        hbm_bandwidth=5.3 * TB,        # 5300 GB/s HBM3
+        cpu_ram_capacity=512 * GB,
+        cpu_gpu_bandwidth=128 * GB,    # PCIe Gen5
+        fp16_flops=1307 * TFLOPS,
+        int8_flops=2615 * TFLOPS,
+        fp32_flops=163 * TFLOPS,
+        sram_capacity=256 * (1 << 20), # 256 MB Infinity Cache
+        interconnect_bandwidth=896 * GB,  # Infinity Fabric
+    )
+
+    specs["MI325X"] = HardwareSpec(
+        name="MI325X",
+        hbm_capacity=256 * GB,
+        hbm_bandwidth=6.0 * TB,        # 6000 GB/s HBM3e
+        cpu_ram_capacity=512 * GB,
+        cpu_gpu_bandwidth=128 * GB,
+        fp16_flops=1307 * TFLOPS,      # same CDNA 3 die as MI300X
+        int8_flops=2615 * TFLOPS,
+        fp32_flops=163 * TFLOPS,
+        sram_capacity=256 * (1 << 20),
+        interconnect_bandwidth=896 * GB,
+    )
+
+    specs["MI350X"] = HardwareSpec(
+        name="MI350X",
+        hbm_capacity=288 * GB,
+        hbm_bandwidth=8.0 * TB,        # 8000 GB/s HBM3e
+        cpu_ram_capacity=512 * GB,
+        cpu_gpu_bandwidth=128 * GB,
+        fp16_flops=2307 * TFLOPS,      # CDNA 4
+        int8_flops=4614 * TFLOPS,
+        fp32_flops=144 * TFLOPS,
+        sram_capacity=256 * (1 << 20),
+        interconnect_bandwidth=896 * GB,
+    )
+
+    # --- Google TPU -----------------------------------------------------------
+
+    specs["TPU_v5e"] = HardwareSpec(
+        name="TPU_v5e",
+        hbm_capacity=16 * GB,
+        hbm_bandwidth=820 * GB,
+        cpu_ram_capacity=0,
+        cpu_gpu_bandwidth=0,
+        fp16_flops=197 * TFLOPS,
+        int8_flops=394 * TFLOPS,
+        fp32_flops=49 * TFLOPS,
+        sram_capacity=128 * (1 << 20), # 128 MiB VMEM
+        interconnect_bandwidth=1600 * GB,  # ICI
+        unified_memory=True,
+    )
+
+    specs["TPU_v6e"] = HardwareSpec(
+        name="TPU_v6e",
+        hbm_capacity=32 * GB,
+        hbm_bandwidth=1640 * GB,
+        cpu_ram_capacity=0,
+        cpu_gpu_bandwidth=0,
+        fp16_flops=918 * TFLOPS,       # 4.7x TPU v5e (Trillium)
+        int8_flops=1836 * TFLOPS,
+        fp32_flops=230 * TFLOPS,       # estimated
+        sram_capacity=128 * (1 << 20),
+        interconnect_bandwidth=3200 * GB,
+        unified_memory=True,
+    )
+
+    specs["TPU_v7"] = HardwareSpec(
+        name="TPU_v7",
+        hbm_capacity=192 * GB,
+        hbm_bandwidth=7.37 * TB,       # 7370 GB/s HBM3e (Ironwood)
+        cpu_ram_capacity=0,
+        cpu_gpu_bandwidth=0,
+        fp16_flops=2300 * TFLOPS,
+        int8_flops=4600 * TFLOPS,
+        fp32_flops=575 * TFLOPS,       # estimated (no FP32 MXU)
+        sram_capacity=256 * (1 << 20), # estimated
+        interconnect_bandwidth=1200 * GB,  # ICI per chip
+        unified_memory=True,
+    )
+
+    # --- Intel ----------------------------------------------------------------
+
+    specs["Gaudi_3"] = HardwareSpec(
+        name="Gaudi_3",
+        hbm_capacity=128 * GB,
+        hbm_bandwidth=3.7 * TB,        # 3700 GB/s HBM2e
+        cpu_ram_capacity=512 * GB,
+        cpu_gpu_bandwidth=128 * GB,    # PCIe Gen5
+        fp16_flops=1835 * TFLOPS,
+        int8_flops=1835 * TFLOPS,      # same rate as BF16 on Gaudi
+        fp32_flops=28.7 * TFLOPS,      # vector FP32
+        sram_capacity=96 * (1 << 20),  # 48 MB per die x2
+        interconnect_bandwidth=1200 * GB,  # 24x 200GbE
+    )
+
+    # --- Apple Silicon --------------------------------------------------------
+
+    specs["M4_Max"] = HardwareSpec(
+        name="M4_Max",
+        hbm_capacity=128 * GB,         # unified, max config
+        hbm_bandwidth=546 * GB,        # 546 GB/s (40-core GPU)
+        cpu_ram_capacity=0,
+        cpu_gpu_bandwidth=0,
+        fp16_flops=18.4 * TFLOPS,      # 40-core GPU
+        int8_flops=36.8 * TFLOPS,      # estimated 2x FP16
+        fp32_flops=18.4 * TFLOPS,      # Apple GPU: FP16 = FP32 rate
+        sram_capacity=48 * (1 << 20),
+        interconnect_bandwidth=0,
+        unified_memory=True,
+    )
+
+    # --- Qualcomm -------------------------------------------------------------
+
+    specs["Snapdragon_X_Elite"] = HardwareSpec(
+        name="Snapdragon_X_Elite",
+        hbm_capacity=32 * GB,          # LPDDR5X unified
+        hbm_bandwidth=136 * GB,        # 136 GB/s LPDDR5X-8448
+        cpu_ram_capacity=0,
+        cpu_gpu_bandwidth=0,
+        fp16_flops=9.2 * TFLOPS,       # Adreno GPU FP16
+        int8_flops=45 * TFLOPS,        # Hexagon NPU INT8
+        fp32_flops=4.6 * TFLOPS,       # Adreno GPU FP32
+        sram_capacity=12 * (1 << 20),
+        interconnect_bandwidth=0,
+        unified_memory=True,
+    )
+
+    return specs
+
+
+# ---------------------------------------------------------------------------
+# Model catalog (as of Feb 2026)
+# ---------------------------------------------------------------------------
+def get_model_configs() -> dict[str, ModelConfig]:
+    """Return a catalog of model configs keyed by name.
+
+    MoE models use d_ff = per-expert FFN intermediate dimension, and
+    num_experts / experts_per_token for routing. num_params includes all
+    expert weights. For architectures with mixed dense/MoE layers (e.g.
+    Maverick), num_params is an approximation — see per-model comments.
+    """
+    models = {}
+
+    # =========================================================================
+    # Reference / small models
+    # =========================================================================
+
+    models["Tiny-1B"] = ModelConfig(
+        name="Tiny-1B",
+        num_layers=22,
+        d_model=2048,
+        num_heads=32,
+        num_kv_heads=4,
+        d_ff=5632,
+        vocab_size=32000,
+    )
+
+    # =========================================================================
+    # Meta LLaMA 3.1 / 3.2 / 3.3  (dense, open-weight)
+    # 3.1-8B has identical architecture to 3-8B; 3.3-70B identical to 3.1-70B.
+    # =========================================================================
+
+    models["LLaMA-3.1-8B"] = ModelConfig(
+        name="LLaMA-3.1-8B",
+        num_layers=32,
+        d_model=4096,
+        num_heads=32,
+        num_kv_heads=8,        # GQA
+        d_ff=14336,
+        vocab_size=128256,
+    )
+
+    models["LLaMA-3.1-70B"] = ModelConfig(
+        name="LLaMA-3.1-70B",
+        num_layers=80,
+        d_model=8192,
+        num_heads=64,
+        num_kv_heads=8,        # GQA
+        d_ff=28672,
+        vocab_size=128256,
+    )
+
+    models["LLaMA-3.2-3B"] = ModelConfig(
+        name="LLaMA-3.2-3B",
+        num_layers=28,
+        d_model=3072,
+        num_heads=24,
+        num_kv_heads=8,        # GQA
+        d_ff=8192,
+        vocab_size=128256,
+    )
+
+    models["LLaMA-3.3-70B"] = ModelConfig(
+        # Same architecture as 3.1-70B; improved via post-training only.
+        name="LLaMA-3.3-70B",
+        num_layers=80,
+        d_model=8192,
+        num_heads=64,
+        num_kv_heads=8,
+        d_ff=28672,
+        vocab_size=128256,
+    )
+
+    # =========================================================================
+    # Meta LLaMA 4  (MoE, native multimodal, iRoPE, Apr 2025)
+    #
+    # Scout: 109B total / 17B active, 16 experts top-1, all 48 layers MoE.
+    #   intermediate_size (per-expert) = 8192, intermediate_size_mlp = 16384 (unused).
+    # Maverick: ~400B total / 17B active, 128 experts top-1, alternating
+    #   dense (d_ff=16384) + MoE (expert d_ff=8192) layers.
+    #
+    # Source: HF meta-llama/Llama-4-Scout-17B-16E-Instruct config.json,
+    #         configuration_llama4.py, modeling_llama4.py
+    # =========================================================================
+
+    models["Llama-4-Scout-17B-16E"] = ModelConfig(
+        name="Llama-4-Scout-17B-16E",
+        num_layers=48,
+        d_model=5120,
+        num_heads=40,
+        num_kv_heads=8,        # GQA
+        d_ff=8192,             # per-expert FFN dim (intermediate_size)
+        vocab_size=202048,
+        head_dim=128,
+        num_experts=16,
+        experts_per_token=1,
+    )
+
+    models["Llama-4-Maverick-17B-128E"] = ModelConfig(
+        # WARNING: Maverick alternates 24 MoE layers (128 experts, d_ff=8192)
+        # with 24 dense layers (d_ff=16384). This uniform representation
+        # overcounts num_params (~777B computed vs ~400B actual) because it
+        # treats all 48 layers as having 128 expert FFN blocks. Treat
+        # param_bytes as an upper bound; active compute per token is correct.
+        name="Llama-4-Maverick-17B-128E",
+        num_layers=48,
+        d_model=5120,
+        num_heads=40,
+        num_kv_heads=8,
+        d_ff=8192,             # per-expert FFN dim (intermediate_size)
+        vocab_size=202048,
+        head_dim=128,
+        num_experts=128,
+        experts_per_token=1,
+    )
+
+    # =========================================================================
+    # Qwen 2.5  (dense, strong baselines)
+    # =========================================================================
+
+    models["Qwen2.5-14B"] = ModelConfig(
+        name="Qwen2.5-14B",
+        num_layers=48,
+        d_model=5120,
+        num_heads=40,
+        num_kv_heads=8,        # GQA
+        d_ff=13824,
+        vocab_size=152064,
+    )
+
+    models["Qwen2.5-72B"] = ModelConfig(
+        name="Qwen2.5-72B",
+        num_layers=80,
+        d_model=8192,
+        num_heads=64,
+        num_kv_heads=8,        # GQA
+        d_ff=29568,
+        vocab_size=152064,
+    )
+
+    # =========================================================================
+    # Qwen 3  (dense, hybrid thinking/non-thinking, Apr 2025)
+    # Source: HF config.json for Qwen/Qwen3-{4B,8B,32B}
+    # =========================================================================
+
+    models["Qwen3-4B"] = ModelConfig(
+        name="Qwen3-4B",
+        num_layers=36,
+        d_model=2560,
+        num_heads=32,
+        num_kv_heads=8,        # GQA
+        d_ff=9728,
+        vocab_size=151936,
+        head_dim=128,          # decoupled from d_model/num_heads
+    )
+
+    models["Qwen3-8B"] = ModelConfig(
+        name="Qwen3-8B",
+        num_layers=36,
+        d_model=4096,
+        num_heads=32,
+        num_kv_heads=8,        # GQA (4 Q heads per KV head)
+        d_ff=12288,
+        vocab_size=151936,
+        head_dim=128,
+    )
+
+    models["Qwen3-32B"] = ModelConfig(
+        name="Qwen3-32B",
+        num_layers=64,
+        d_model=5120,
+        num_heads=64,
+        num_kv_heads=8,        # GQA
+        d_ff=25600,
+        vocab_size=151936,
+        head_dim=128,
+    )
+
+    # =========================================================================
+    # DeepSeek V3 / R1  (MoE + MLA attention, Dec 2024 / Jan 2025)
+    # Source: HF deepseek-ai/DeepSeek-V3 config.json, configuration_deepseek_v3.py
+    #
+    # Architecture: 3 dense layers (d_ff=18432) + 58 MoE layers
+    #   (256 routed + 1 shared expert, top-8 routing, per-expert d_ff=2048).
+    #   Active per token: 8 routed + 1 shared = 9 experts * 2048 = 18432
+    #   effective FFN width (matches dense layers by design).
+    #
+    # MLA attention: num_kv_heads=128 reflects weight shape, but KV cache
+    #   is compressed to kv_lora_rank=512 + qk_rope_dim=64 = 576 dims/layer,
+    #   so kv_bytes_per_token() overestimates by ~28x.
+    #
+    # This config uses d_ff=2048 (per-expert). The 3 dense layers with
+    #   d_ff=18432 are not separately modeled (58/61 layers are MoE).
+    # =========================================================================
+
+    models["DeepSeek-V3"] = ModelConfig(
+        name="DeepSeek-V3",
+        num_layers=61,
+        d_model=7168,
+        num_heads=128,
+        num_kv_heads=128,      # MLA: weight shape, not cache shape
+        d_ff=2048,             # per-expert FFN dim (moe_intermediate_size)
+        vocab_size=129280,
+        head_dim=128,          # v_head_dim; Q/K use 128+64=192 via MLA decomposition
+        num_experts=256,       # 256 routed (+ 1 shared not counted here)
+        experts_per_token=8,   # top-8 routed (+ 1 shared always active)
+    )
+
+    models["DeepSeek-R1"] = ModelConfig(
+        # Same architecture as V3, different post-training (RL-based reasoning).
+        name="DeepSeek-R1",
+        num_layers=61,
+        d_model=7168,
+        num_heads=128,
+        num_kv_heads=128,
+        d_ff=2048,
+        vocab_size=129280,
+        head_dim=128,
+        num_experts=256,
+        experts_per_token=8,
+    )
+
+    # =========================================================================
+    # Google Gemma 3  (dense, multimodal, Mar 2025)
+    # Source: HF google/gemma-3-{4b,27b}-pt config.json
+    # =========================================================================
+
+    models["Gemma-3-4B"] = ModelConfig(
+        name="Gemma-3-4B",
+        num_layers=34,
+        d_model=2560,
+        num_heads=8,
+        num_kv_heads=4,        # GQA
+        d_ff=10240,
+        vocab_size=262208,
+        head_dim=256,          # NOT d_model//num_heads (would be 320)
+    )
+
+    models["Gemma-3-27B"] = ModelConfig(
+        name="Gemma-3-27B",
+        num_layers=62,
+        d_model=5376,
+        num_heads=32,
+        num_kv_heads=16,       # GQA
+        d_ff=21504,
+        vocab_size=262208,
+        head_dim=128,          # NOT d_model//num_heads (would be 168)
+    )
+
+    # =========================================================================
+    # Microsoft Phi  (dense, small but capable)
+    # Source: HF microsoft/Phi-4-mini-instruct, unsloth/phi-4 config.json
+    # =========================================================================
+
+    models["Phi-4-14B"] = ModelConfig(
+        name="Phi-4-14B",
+        num_layers=40,
+        d_model=5120,
+        num_heads=40,
+        num_kv_heads=10,       # GQA
+        d_ff=17920,
+        vocab_size=100352,
+    )
+
+    models["Phi-4-mini-3.8B"] = ModelConfig(
+        name="Phi-4-mini-3.8B",
+        num_layers=32,
+        d_model=3072,
+        num_heads=24,
+        num_kv_heads=8,        # GQA
+        d_ff=8192,
+        vocab_size=200064,
+    )
+
+    return models
