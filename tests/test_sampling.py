@@ -61,3 +61,24 @@ class TestSyntheticSampling:
             if spec.unified_memory:
                 assert spec.cpu_ram_capacity == 0
                 assert spec.cpu_gpu_bandwidth == 0.0
+
+    def test_disk_sampling_present(self):
+        """About 60% of samples should have disk storage."""
+        rng = np.random.default_rng(42)
+        n = 1000
+        disk_count = sum(
+            sample_synthetic_hardware(rng).disk_capacity > 0 for _ in range(n)
+        )
+        frac = disk_count / n
+        assert 0.45 < frac < 0.75, f"Disk fraction = {frac:.2f}"
+
+    def test_disk_values_plausible(self):
+        """Disk specs should be in plausible ranges when present."""
+        rng = np.random.default_rng(42)
+        for _ in range(100):
+            spec = sample_synthetic_hardware(rng)
+            if spec.disk_capacity > 0:
+                assert 256 * GB <= spec.disk_capacity <= 8 * (1 << 40)
+                assert 1 * GB <= spec.disk_bandwidth <= 7 * GB
+            else:
+                assert spec.disk_bandwidth == 0.0

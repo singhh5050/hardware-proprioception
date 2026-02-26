@@ -30,6 +30,7 @@ def sample_synthetic_hardware(
       - SRAM:  4 – 256 MB
       - CPU:   0 – 1 TB RAM, 0 – 256 GB/s PCIe
       - Interconnect: 0 – 3.2 TB/s
+      - Disk:  60% chance of NVMe (256 GB – 8 TB, 1 – 7 GB/s)
 
     20% chance of unified memory (Apple / TPU-like: no CPU RAM).
 
@@ -62,6 +63,14 @@ def sample_synthetic_hardware(
             _log_uniform(rng, 100 * GB, 3200 * GB) if rng.random() < 0.7 else 0.0
         )
 
+    # Disk / NVMe: 60% chance (servers), 40% none (edge)
+    if rng.random() < 0.6:
+        disk_capacity = int(_log_uniform(rng, 256 * GB, 8 * TB))
+        disk_bandwidth = _log_uniform(rng, 1 * GB, 7 * GB)
+    else:
+        disk_capacity = 0
+        disk_bandwidth = 0.0
+
     return HardwareSpec(
         name="synthetic",
         hbm_capacity=hbm_capacity,
@@ -74,4 +83,6 @@ def sample_synthetic_hardware(
         sram_capacity=sram_capacity,
         interconnect_bandwidth=interconnect_bandwidth,
         unified_memory=unified,
+        disk_capacity=disk_capacity,
+        disk_bandwidth=disk_bandwidth,
     )
