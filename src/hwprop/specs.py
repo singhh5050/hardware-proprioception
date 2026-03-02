@@ -80,7 +80,6 @@ class HardwareSpec:
             self._validate_tiers(self.tiers)
             return
 
-        # Backward-compatible default hierarchy for legacy constructor fields:
         # hbm <- cpu <- disk (disk parent falls back to hbm when cpu is absent).
         built_tiers: list[MemoryTier] = [
             MemoryTier(

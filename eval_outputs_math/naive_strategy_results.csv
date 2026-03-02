@@ -1,0 +1,7 @@
+strategy,task_set,mean_quality,mean_latency_ms,mean_budget_overshoot_frac,mean_hbm_pressure,mean_retention,solved_rate
+keep_all,math_dataset,0.6284,4.1529,5.0243,0.1749,1.0000,0.0000
+quantize_all,math_dataset,0.6284,4.1520,5.0223,0.1748,1.0000,0.0000
+cpu_offload_heavy,math_dataset,0.6173,4.1866,5.0979,0.1748,0.9961,0.0000
+disk_offload_heavy,math_dataset,0.4732,5.0509,6.9839,0.1748,0.9961,0.0000
+balanced,math_dataset,0.6264,4.2831,5.3126,0.1748,0.9947,0.0000
+keep_recent_window,math_dataset,0.6284,4.1533,5.0272,0.1749,1.0000,0.0000

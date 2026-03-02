@@ -6,6 +6,18 @@ from hwprop.specs import MemoryTier, HardwareSpec, ModelConfig, get_hardware_spe
 from hwprop.cost_model import CostModel, StepCost, KVCacheState
 from hwprop.oracle import CostOracle, CostInfo, KVAction
 from hwprop.sampling import sample_synthetic_hardware
+from hwprop.eval_pipeline import (
+    EvalTask,
+    EvalResult,
+    BudgetSweepResult,
+    generate_tasks,
+    generate_tasks_from_math_dataset,
+    get_naive_strategies,
+    run_eval,
+    run_budget_sweep,
+    plot_results,
+    plot_budget_sweep,
+)
 
 __all__ = [
     "MemoryTier",
@@ -20,4 +32,14 @@ __all__ = [
     "CostInfo",
     "KVAction",
     "sample_synthetic_hardware",
+    "EvalTask",
+    "EvalResult",
+    "BudgetSweepResult",
+    "generate_tasks",
+    "generate_tasks_from_math_dataset",
+    "get_naive_strategies",
+    "run_eval",
+    "run_budget_sweep",
+    "plot_results",
+    "plot_budget_sweep",
 ]
