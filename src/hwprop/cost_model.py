@@ -95,15 +95,17 @@ class CostModel:
 
         # --- CPU transfer (additive — blocks on PCIe) ---
         cpu_kv_bytes = kv_state.tokens_in_cpu * kv_fp16_per_layer * L * batch_size
-        if hw.cpu_gpu_bandwidth > 0:
-            cpu_transfer_time = cpu_kv_bytes / hw.cpu_gpu_bandwidth
+        cpu_to_hbm_bw = hw.transfer_bandwidth_to_hbm("cpu")
+        if cpu_to_hbm_bw > 0:
+            cpu_transfer_time = cpu_kv_bytes / cpu_to_hbm_bw
         else:
             cpu_transfer_time = 0.0
 
         # --- Disk transfer (additive — blocks on NVMe read) ---
         disk_kv_bytes = kv_state.tokens_on_disk * kv_fp16_per_layer * L * batch_size
-        if hw.disk_bandwidth > 0:
-            disk_transfer_time = disk_kv_bytes / hw.disk_bandwidth
+        disk_to_hbm_bw = hw.transfer_bandwidth_to_hbm("disk")
+        if disk_to_hbm_bw > 0:
+            disk_transfer_time = disk_kv_bytes / disk_to_hbm_bw
         else:
             disk_transfer_time = 0.0
 

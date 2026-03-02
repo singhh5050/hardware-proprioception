@@ -27,6 +27,21 @@ BYTES_PER_INT8 = 1
 # HardwareSpec
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
+class MemoryTier:
+    """One memory tier in a hardware hierarchy.
+
+    ``bandwidth`` is the tier's local service bandwidth.
+    ``link_bandwidth_to_parent`` is transfer bandwidth to ``parent`` tier.
+    """
+
+    name: str
+    capacity: int
+    bandwidth: float
+    parent: str | None = None
+    link_bandwidth_to_parent: float = 0.0
+
+
+@dataclass(frozen=True)
 class HardwareSpec:
     """Specification for a single accelerator (GPU / TPU / SoC).
 
@@ -58,6 +73,99 @@ class HardwareSpec:
     # Disk / NVMe (cold storage tier)
     disk_capacity: int = 0         # bytes (NVMe/SSD, 0 = none)
     disk_bandwidth: float = 0.0    # bytes/s (NVMe sequential read)
+    tiers: tuple[MemoryTier, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.tiers:
+            self._validate_tiers(self.tiers)
+            return
+
+        # Backward-compatible default hierarchy for legacy constructor fields:
+        # hbm <- cpu <- disk (disk parent falls back to hbm when cpu is absent).
+        built_tiers: list[MemoryTier] = [
+            MemoryTier(
+                name="hbm",
+                capacity=self.hbm_capacity,
+                bandwidth=self.hbm_bandwidth,
+                parent=None,
+                link_bandwidth_to_parent=0.0,
+            )
+        ]
+        has_cpu = self.cpu_ram_capacity > 0 and self.cpu_gpu_bandwidth > 0
+        if has_cpu:
+            built_tiers.append(
+                MemoryTier(
+                    name="cpu",
+                    capacity=self.cpu_ram_capacity,
+                    bandwidth=self.cpu_gpu_bandwidth,
+                    parent="hbm",
+                    link_bandwidth_to_parent=self.cpu_gpu_bandwidth,
+                )
+            )
+        if self.disk_capacity > 0 and self.disk_bandwidth > 0:
+            built_tiers.append(
+                MemoryTier(
+                    name="disk",
+                    capacity=self.disk_capacity,
+                    bandwidth=self.disk_bandwidth,
+                    parent="cpu" if has_cpu else "hbm",
+                    link_bandwidth_to_parent=self.disk_bandwidth,
+                )
+            )
+
+        built_tuple = tuple(built_tiers)
+        self._validate_tiers(built_tuple)
+        object.__setattr__(self, "tiers", built_tuple)
+
+    @staticmethod
+    def _validate_tiers(tiers: tuple[MemoryTier, ...]) -> None:
+        if not tiers:
+            raise ValueError("HardwareSpec.tiers cannot be empty")
+        names = {t.name for t in tiers}
+        if len(names) != len(tiers):
+            raise ValueError("HardwareSpec.tiers contains duplicate tier names")
+        if "hbm" not in names:
+            raise ValueError("HardwareSpec.tiers must include an 'hbm' tier")
+        for t in tiers:
+            if t.parent is not None and t.parent not in names:
+                raise ValueError(
+                    f"Tier '{t.name}' references unknown parent '{t.parent}'"
+                )
+
+    def get_tier(self, name: str) -> MemoryTier | None:
+        for tier in self.tiers:
+            if tier.name == name:
+                return tier
+        return None
+
+    def transfer_bandwidth_to_hbm(self, tier_name: str) -> float:
+        """Effective transfer bandwidth from ``tier_name`` to HBM.
+
+        Follows parent links up to ``hbm`` and takes the bottleneck link.
+        Returns 0 when the tier does not exist or no path is available.
+        """
+        if tier_name == "hbm":
+            return self.hbm_bandwidth
+        tier_map = {t.name: t for t in self.tiers}
+        start = tier_map.get(tier_name)
+        if start is None:
+            return 0.0
+
+        cur = start
+        bottleneck = float("inf")
+        visited: set[str] = set()
+        while cur.name != "hbm":
+            if cur.name in visited:
+                return 0.0
+            visited.add(cur.name)
+            if cur.parent is None or cur.link_bandwidth_to_parent <= 0:
+                return 0.0
+            bottleneck = min(bottleneck, cur.link_bandwidth_to_parent)
+            parent = tier_map.get(cur.parent)
+            if parent is None:
+                return 0.0
+            cur = parent
+        return bottleneck if bottleneck != float("inf") else 0.0
 
     # --- computed properties ---------------------------------------------------
 

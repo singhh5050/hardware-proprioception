@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from hwprop.specs import get_hardware_specs, get_model_configs, GB, TB, TFLOPS
+from hwprop.specs import MemoryTier, HardwareSpec, get_hardware_specs, get_model_configs, GB, TB, TFLOPS
 
 
 class TestHardwareSpecs:
@@ -81,6 +81,34 @@ class TestHardwareSpecs:
         edge = ["M4_Max", "Snapdragon_X_Elite", "TPU_v5e", "TPU_v6e", "TPU_v7"]
         for name in edge:
             assert specs[name].disk_capacity == 0, f"{name} should have no disk"
+
+    def test_legacy_fields_build_default_tier_hierarchy(self):
+        h100 = get_hardware_specs()["H100_SXM"]
+        tier_names = {t.name for t in h100.tiers}
+        assert {"hbm", "cpu", "disk"}.issubset(tier_names)
+        assert h100.transfer_bandwidth_to_hbm("cpu") == h100.cpu_gpu_bandwidth
+        assert h100.transfer_bandwidth_to_hbm("disk") == h100.disk_bandwidth
+
+    def test_custom_tier_hierarchy_supports_variable_depth(self):
+        spec = HardwareSpec(
+            name="deep-hierarchy",
+            hbm_capacity=64 * GB,
+            hbm_bandwidth=2 * TB,
+            cpu_ram_capacity=0,
+            cpu_gpu_bandwidth=0.0,
+            fp16_flops=100 * TFLOPS,
+            int8_flops=200 * TFLOPS,
+            fp32_flops=20 * TFLOPS,
+            sram_capacity=16 * (1 << 20),
+            interconnect_bandwidth=0.0,
+            tiers=(
+                MemoryTier("hbm", capacity=64 * GB, bandwidth=2 * TB),
+                MemoryTier("dram", capacity=256 * GB, bandwidth=64 * GB, parent="hbm", link_bandwidth_to_parent=64 * GB),
+                MemoryTier("pmem", capacity=1 * TB, bandwidth=20 * GB, parent="dram", link_bandwidth_to_parent=20 * GB),
+            ),
+        )
+        assert spec.transfer_bandwidth_to_hbm("dram") == 64 * GB
+        assert spec.transfer_bandwidth_to_hbm("pmem") == 20 * GB
 
 
 class TestModelConfigs:
