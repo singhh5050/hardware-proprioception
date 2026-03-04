@@ -130,13 +130,13 @@ def main() -> int:
     results = []
 
     # --- 1. Baseline (no press) ---
-    print("\n[1/3] Running baseline (no press)...")
+    print("\n[1/4] Running baseline (no press)...")
     r_baseline = run_generation(model, tokenizer, MATH_PROBLEM, label="baseline")
     print_result(r_baseline)
     results.append(r_baseline)
 
     # --- 2. StreamingLLM via DecodingPress ---
-    print("\n[2/3] Running StreamingLLM (DecodingPress + StreamingLLMPress)...")
+    print("\n[2/4] Running StreamingLLM (DecodingPress + StreamingLLMPress)...")
     try:
         from kvpress import DecodingPress, StreamingLLMPress
 
@@ -159,7 +159,7 @@ def main() -> int:
         results.append({"label": "streaming_llm_512", "error": str(e)})
 
     # --- 3. ExpectedAttentionPress via DecodingPress ---
-    print("\n[3/3] Running ExpectedAttention (DecodingPress + ExpectedAttentionPress)...")
+    print("\n[3/4] Running ExpectedAttention (DecodingPress + ExpectedAttentionPress)...")
     try:
         from kvpress import DecodingPress, ExpectedAttentionPress
 
@@ -180,6 +180,55 @@ def main() -> int:
     except Exception as e:
         print(f"  FAILED: {type(e).__name__}: {e}")
         results.append({"label": "expected_attention_512", "error": str(e)})
+
+    # --- 4. INT8 HQQ quantized cache ---
+    print("\n[4/4] Running INT8 HQQ quantized cache...")
+    try:
+        messages = build_prompt(tokenizer, MATH_PROBLEM)
+        text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        input_ids = tokenizer(text, return_tensors="pt").input_ids.to(model.device)
+        prompt_len = input_ids.shape[1]
+
+        torch.cuda.synchronize() if torch.cuda.is_available() else None
+        t0 = time.perf_counter()
+
+        output_ids = model.generate(
+            input_ids,
+            max_new_tokens=MAX_NEW_TOKENS,
+            do_sample=False,
+            cache_implementation="quantized",
+            cache_config={"nbits": 8, "backend": "HQQ", "residual_length": 128},
+        )
+
+        torch.cuda.synchronize() if torch.cuda.is_available() else None
+        elapsed = time.perf_counter() - t0
+
+        generated_ids = output_ids[0, prompt_len:]
+        generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+        tokens_generated = len(generated_ids)
+
+        import re
+        boxed_match = re.findall(r"\\boxed\{([^}]*)\}", generated_text)
+        extracted = boxed_match[-1] if boxed_match else None
+
+        r_int8 = {
+            "label": "int8_hqq",
+            "prompt_tokens": prompt_len,
+            "tokens_generated": tokens_generated,
+            "elapsed_s": elapsed,
+            "tokens_per_sec": tokens_generated / elapsed if elapsed > 0 else 0,
+            "extracted_answer": extracted,
+            "correct": extracted is not None and extracted.strip() == EXPECTED_ANSWER,
+            "text_preview": generated_text[:300],
+            "full_text": generated_text,
+        }
+        print_result(r_int8)
+        results.append(r_int8)
+    except Exception as e:
+        print(f"  FAILED: {type(e).__name__}: {e}")
+        results.append({"label": "int8_hqq", "error": str(e)})
 
     # --- Summary ---
     print("\n" + "=" * 60)

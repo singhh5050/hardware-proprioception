@@ -26,6 +26,8 @@ accuracy = [
     "datasets",
     "kvpress",
     "optimum-quanto",
+    "hqq",
+    "math-verify",
 ]
 
 [tool.hatch.build.targets.wheel]

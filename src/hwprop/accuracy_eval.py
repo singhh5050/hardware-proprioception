@@ -200,12 +200,14 @@ def get_strategies(decision_interval: int = 64) -> dict[str, StrategyConfig]:
         budget_tokens=None,
     )
 
-    # 2. full_cache_int4 — quantize all KV to INT4
+    # 2. full_cache_int8 — quantize all KV to INT8 via HQQ
     # Uses cache_implementation="quantized" in generate() rather than
-    # constructing QuantoQuantizedCache directly (which requires model config).
-    strategies["full_cache_int4"] = StrategyConfig(
-        name="full_cache_int4",
-        description="Quantize all KV to INT4",
+    # constructing QuantizedCache directly (which requires model config).
+    # INT8+HQQ avoids logit spikes with Qwen2.5's GQA heads (INT4 causes
+    # degenerate repetition). residual_length=128 keeps sink tokens unquantized.
+    strategies["full_cache_int8"] = StrategyConfig(
+        name="full_cache_int8",
+        description="Quantize all KV to INT8 (HQQ, residual=128)",
         budget_tokens=None,
         quantized=True,
     )
@@ -256,7 +258,7 @@ def get_strategies(decision_interval: int = 64) -> dict[str, StrategyConfig]:
     def _snapkv_factory():
         from kvpress import DecodingPress, SnapKVPress
         return DecodingPress(
-            SnapKVPress(),
+            SnapKVPress(window_size=32),
             target_size=512,
             compression_interval=decision_interval,
         )
@@ -285,6 +287,19 @@ def get_strategies(decision_interval: int = 64) -> dict[str, StrategyConfig]:
     )
 
     return strategies
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _needs_eager_attention(strategies: dict[str, StrategyConfig]) -> bool:
+    """Check if any strategy requires materialized attention weights.
+
+    ObservedAttentionPress (H2O) asserts attentions is not None — this only
+    works with attn_implementation="eager" (SDPA/FlashAttention don't
+    materialize attention weight tensors).
+    """
+    return any(name.startswith("h2o_") for name in strategies)
 
 
 # ---------------------------------------------------------------------------
@@ -351,13 +366,16 @@ def generate_with_strategy(
         tokens_generated = output_ids.shape[1] - prompt_len
         cache_size = strategy.budget_tokens or (prompt_len + tokens_generated)
     elif strategy.quantized:
-        # Path B: INT4 quantized KV cache via transformers generate() API
+        # Path B: INT8 quantized KV cache via transformers generate() API
+        # INT8+HQQ avoids logit spikes with Qwen2.5's 2 GQA heads that cause
+        # degenerate repetition under INT4. residual_length=128 keeps recent
+        # tokens (including attention sinks) in full precision.
         output_ids = model.generate(
             input_ids,
             max_new_tokens=max_new_tokens,
             do_sample=False,
             cache_implementation="quantized",
-            cache_config={"nbits": 4, "backend": "quanto"},
+            cache_config={"nbits": 8, "backend": "HQQ", "residual_length": 128},
         )
         tokens_generated = output_ids.shape[1] - prompt_len
         cache_size = prompt_len + tokens_generated
@@ -400,10 +418,17 @@ def run_accuracy_eval(
 
     print(f"Loading model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    attn_kwargs = {}
+    if _needs_eager_attention(strategies):
+        attn_kwargs["attn_implementation"] = "eager"
+        print("NOTE: Using eager attention (required for H2O strategies)")
+
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         dtype=torch.bfloat16,
         device_map=device,
+        **attn_kwargs,
     )
     model.eval()
     print(f"Model loaded on {model.device}")

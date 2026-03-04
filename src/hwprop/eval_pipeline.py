@@ -471,7 +471,7 @@ def strategy_to_kv_update(
     if strategy_name == "full_cache":
         return {"tokens_kept": active_tokens, "tokens_evicted": 0, "is_quantized": False}
 
-    if strategy_name == "full_cache_int4" or quantized:
+    if strategy_name in ("full_cache_int4", "full_cache_int8") or quantized:
         return {"tokens_kept": active_tokens, "tokens_evicted": 0, "is_quantized": True}
 
     # Eviction strategies (window, h2o, snapkv, expected_attn)

@@ -108,7 +108,7 @@ class TestStrategyRegistry:
     def test_strategy_names(self):
         strategies = get_strategies()
         expected = {
-            "full_cache", "full_cache_int4",
+            "full_cache", "full_cache_int8",
             "window_128", "window_256", "window_512", "window_1024",
             "h2o_128", "h2o_256", "h2o_512", "h2o_1024",
             "snapkv_512", "expected_attn_512",
@@ -120,8 +120,8 @@ class TestStrategyRegistry:
         assert s.press_factory is None
         assert s.budget_tokens is None
 
-    def test_full_cache_int4_is_quantized(self):
-        s = get_strategies()["full_cache_int4"]
+    def test_full_cache_int8_is_quantized(self):
+        s = get_strategies()["full_cache_int8"]
         assert s.press_factory is None
         assert s.quantized is True
 
@@ -222,9 +222,9 @@ class TestStrategyToKvUpdate:
         assert result["tokens_evicted"] == 0
         assert result["is_quantized"] is False
 
-    def test_full_cache_int4_marks_quantized(self):
+    def test_full_cache_int8_marks_quantized(self):
         from hwprop.eval_pipeline import strategy_to_kv_update
-        result = strategy_to_kv_update("full_cache_int4", None, 500, quantized=True)
+        result = strategy_to_kv_update("full_cache_int8", None, 500, quantized=True)
         assert result["tokens_kept"] == 500
         assert result["is_quantized"] is True
 
