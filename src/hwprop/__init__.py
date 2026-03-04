@@ -17,6 +17,9 @@ from hwprop.eval_pipeline import (
     run_budget_sweep,
     plot_results,
     plot_budget_sweep,
+    strategy_to_kv_update,
+    compute_strategy_latency,
+    compute_latency_sweep,
 )
 
 __all__ = [
@@ -42,4 +45,7 @@ __all__ = [
     "run_budget_sweep",
     "plot_results",
     "plot_budget_sweep",
+    "strategy_to_kv_update",
+    "compute_strategy_latency",
+    "compute_latency_sweep",
 ]

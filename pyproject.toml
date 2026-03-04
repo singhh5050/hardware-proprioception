@@ -19,6 +19,14 @@ eval = [
     "matplotlib",
     "datasets",
 ]
+accuracy = [
+    "torch>=2.0",
+    "transformers>=4.40",
+    "accelerate",
+    "datasets",
+    "kvpress",
+    "optimum-quanto",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hwprop"]
