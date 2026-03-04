@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hwprop"
-version = "0.1.0"
+version = "0.3.0"
 description = "Analytical roofline-based cost model for LLM decode steps on diverse hardware"
 requires-python = ">=3.10"
 dependencies = [

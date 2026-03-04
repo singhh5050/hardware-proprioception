@@ -1,6 +1,6 @@
 """hwprop — Analytical roofline-based cost oracle for LLM inference on diverse hardware."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from hwprop.specs import MemoryTier, HardwareSpec, ModelConfig, get_hardware_specs, get_model_configs
 from hwprop.cost_model import CostModel, StepCost, KVCacheState

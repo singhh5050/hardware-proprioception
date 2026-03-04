@@ -118,7 +118,6 @@ class TestStrategyRegistry:
     def test_full_cache_has_no_press(self):
         s = get_strategies()["full_cache"]
         assert s.press_factory is None
-        assert s.cache_factory is None
         assert s.budget_tokens is None
 
     def test_full_cache_int4_is_quantized(self):

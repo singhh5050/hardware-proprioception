@@ -66,9 +66,8 @@ class StrategyConfig:
     name: str
     description: str
     budget_tokens: int | None  # target cache size (None = unlimited)
-    # These are set up lazily — they require kvpress imports
+    # Set up lazily — kvpress imports only happen when actually generating
     press_factory: Callable | None = None  # () -> press context manager
-    cache_factory: Callable | None = None  # () -> custom cache object
     quantized: bool = False
 
 
