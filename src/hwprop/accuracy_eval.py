@@ -375,7 +375,7 @@ def generate_with_strategy(
             max_new_tokens=max_new_tokens,
             do_sample=False,
             cache_implementation="quantized",
-            cache_config={"nbits": 8, "backend": "HQQ", "residual_length": 128},
+            cache_config={"nbits": 8, "backend": "hqq", "residual_length": 128},
         )
         tokens_generated = output_ids.shape[1] - prompt_len
         cache_size = prompt_len + tokens_generated

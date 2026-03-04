@@ -115,9 +115,16 @@ def print_result(r: dict) -> None:
 
 
 def main() -> int:
+    import os
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    print(f"Loading model: {MODEL_NAME}")
+    # Store model weights on /workspace (network disk) to avoid filling root
+    hf_home = os.environ.get("HF_HOME", os.path.join(os.getcwd(), ".hf_home"))
+    os.environ.setdefault("HF_HOME", hf_home)
+    os.environ.setdefault("HF_HUB_CACHE", os.path.join(hf_home, "hub"))
+    os.environ.setdefault("HF_DATASETS_CACHE", os.path.join(hf_home, "datasets"))
+
+    print(f"Loading model: {MODEL_NAME} (HF_HOME={os.environ['HF_HOME']})")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
@@ -199,7 +206,7 @@ def main() -> int:
             max_new_tokens=MAX_NEW_TOKENS,
             do_sample=False,
             cache_implementation="quantized",
-            cache_config={"nbits": 8, "backend": "HQQ", "residual_length": 128},
+            cache_config={"nbits": 8, "backend": "hqq", "residual_length": 128},
         )
 
         torch.cuda.synchronize() if torch.cuda.is_available() else None
