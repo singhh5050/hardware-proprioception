@@ -153,6 +153,67 @@ def run_simulation(
     return rows
 
 
+def run_context_sweep(
+    model_name: str = "Qwen2.5-7B",
+    context_lengths: list[int] | None = None,
+    prompt_len: int = 128,
+    decision_interval: int = 64,
+) -> list[dict]:
+    """Sweep decode steps across context lengths for all strategies × hardware.
+
+    Uses the all-HBM tier split to isolate the pure effect of context length
+    on latency spread between strategies.  prompt_len is held fixed; decode_steps
+    = context_length - prompt_len.
+    """
+    if context_lengths is None:
+        context_lengths = [512, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+
+    hardware_configs = get_hardware_specs()
+    model_config = get_model_configs()[model_name]
+
+    rows: list[dict] = []
+    total = len(STRATEGY_META) * len(hardware_configs) * len(context_lengths)
+    count = 0
+
+    print(f"\nContext sweep — model: {model_name}, prompt_len: {prompt_len}")
+    print(f"Context lengths: {context_lengths}")
+    print(f"Total runs: {total}\n")
+
+    for ctx_len in context_lengths:
+        decode_steps = max(1, ctx_len - prompt_len)
+
+        for strat_name, meta in STRATEGY_META.items():
+            for hw_name, hw in hardware_configs.items():
+                count += 1
+                result = compute_strategy_latency(
+                    strategy_name=strat_name,
+                    budget_tokens=meta["budget_tokens"],
+                    hardware=hw,
+                    model_config=model_config,
+                    prompt_len=prompt_len,
+                    decode_steps=decode_steps,
+                    decision_interval=decision_interval,
+                    offload_frac=0.0,
+                    disk_frac=0.0,
+                    quantized=meta["quantized"],
+                )
+                rows.append({
+                    **result,
+                    "context_length": ctx_len,
+                    "prompt_len": prompt_len,
+                    "decode_steps": decode_steps,
+                    "model": model_name,
+                    "hbm_frac": 1.0,
+                    "cpu_frac": 0.0,
+                    "disk_frac": 0.0,
+                })
+
+        if ctx_len in (context_lengths[0], context_lengths[-1]) or count % 500 == 0:
+            print(f"  ctx={ctx_len:>7} tokens  [{count}/{total}]")
+
+    return rows
+
+
 def print_summary(rows: list[dict]) -> None:
     """Print a summary table: strategy x hardware for the all-HBM split."""
     hbm_only = [r for r in rows if r["cpu_frac"] == 0.0 and r["disk_frac"] == 0.0]
@@ -206,6 +267,17 @@ def main() -> None:
         default=64,
         help="Eviction interval (tokens between cache decisions)",
     )
+    parser.add_argument(
+        "--context-lengths",
+        default="512,2048,4096,8192,16384,32768,65536,131072",
+        help="Comma-separated context lengths for the sweep (tokens)",
+    )
+    parser.add_argument(
+        "--sweep-prompt-len",
+        type=int,
+        default=128,
+        help="Fixed prompt length used for the context sweep",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -230,12 +302,24 @@ def main() -> None:
     print_summary(rows)
 
     # Pareto plot: accuracy (real) vs latency (simulated), all-HBM split only
-    # Use the all-HBM split for the cleanest comparison — offload splits
-    # are in the JSONL for anyone who wants to dig further.
     hbm_only_rows = [r for r in rows if r["cpu_frac"] == 0.0 and r["disk_frac"] == 0.0]
     accuracy_results = load_results(args.results)
     plot_pareto(accuracy_results, hbm_only_rows, str(pareto_path))
     print(f"Saved Pareto plot to {pareto_path}")
+
+    # Context length sweep
+    context_lengths = [int(x) for x in args.context_lengths.split(",") if x.strip()]
+    sweep_rows = run_context_sweep(
+        model_name=args.model,
+        context_lengths=context_lengths,
+        prompt_len=args.sweep_prompt_len,
+        decision_interval=args.decision_interval,
+    )
+    sweep_path = output_dir / "latency_context_sweep.jsonl"
+    with sweep_path.open("w") as f:
+        for row in sweep_rows:
+            f.write(json.dumps(row) + "\n")
+    print(f"\nSaved {len(sweep_rows)} rows to {sweep_path}")
 
 
 if __name__ == "__main__":

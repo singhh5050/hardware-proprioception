@@ -2,6 +2,7 @@
 """Additional analysis plots:
   1. Compression ratio vs accuracy scatter
   2. Tier split impact on latency across hardware families
+  3. Latency vs context length (when does KV cache compression start to matter?)
 
 Usage (from repo root):
     python scripts/plot_analysis.py
@@ -231,3 +232,217 @@ out2 = OUTPUT_DIR / "tier_split_latency.png"
 fig.savefig(out2, dpi=200)
 plt.close(fig)
 print(f"Saved {out2}")
+
+
+# ===========================================================================
+# Plot 3: Latency vs context length — when does KV cache compression matter?
+# ===========================================================================
+# Shows all strategies on H100_SXM (all-HBM) across a log-scale context sweep.
+# Top panel: absolute latency. Bottom panel: % savings vs full_cache.
+
+SWEEP_JSONL = OUTPUT_DIR / "latency_context_sweep.jsonl"
+
+if not SWEEP_JSONL.exists():
+    print(f"Skipping plot 3: {SWEEP_JSONL} not found — run run_latency_simulation.py first")
+else:
+    sweep_records: list[dict] = []
+    with SWEEP_JSONL.open() as f:
+        for line in f:
+            sweep_records.append(json.loads(line))
+
+    PLOT_HW = "H100_SXM"
+
+    # Strategies to highlight (one per family + the two extremes)
+    HIGHLIGHT = [
+        "full_cache",
+        "window_1024", "window_512", "window_256", "window_128",
+        "h2o_1024",    "h2o_512",    "h2o_256",    "h2o_128",
+        "snapkv_512",
+        "expected_attn_512",
+        "full_cache_int8",
+    ]
+    # Thinner/lighter lines for the "interior" strategies to reduce clutter
+    BOLD = {"full_cache", "window_128", "h2o_128", "snapkv_512", "expected_attn_512"}
+
+    # Build lookup: (strategy, context_length) -> mean_latency_ms
+    hw_rows = [r for r in sweep_records if r["hardware"] == PLOT_HW]
+    sweep_lookup: dict[tuple, float] = {
+        (r["strategy"], r["context_length"]): r["mean_latency_ms"]
+        for r in hw_rows
+    }
+    ctx_lengths = sorted({r["context_length"] for r in hw_rows})
+
+    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(9, 8), sharex=True)
+
+    for strat in HIGHLIGHT:
+        xs = ctx_lengths
+        ys = [sweep_lookup.get((strat, c)) for c in xs]
+        if any(v is None for v in ys):
+            continue
+
+        lw = 2.2 if strat in BOLD else 1.2
+        alpha = 0.95 if strat in BOLD else 0.55
+        color = _color(strat)
+        ls = "--" if strat == "full_cache_int8" else "-"
+
+        ax_top.plot(xs, ys, color=color, linewidth=lw, alpha=alpha,
+                    linestyle=ls, label=strat)
+
+    ax_top.set_xscale("log")
+    ax_top.set_ylabel("Mean latency per decode step (ms)", fontsize=10)
+    ax_top.set_title(
+        f"Decode Latency vs Context Length — {PLOT_HW}, all-HBM\n"
+        "(roofline simulation, Qwen2.5-7B)",
+        fontsize=11,
+    )
+    ax_top.grid(alpha=0.25)
+    ax_top.legend(fontsize=7, loc="upper left", ncol=2)
+
+    # Bottom panel: % savings vs full_cache
+    full_cache_lat = {c: sweep_lookup.get(("full_cache", c)) for c in ctx_lengths}
+
+    for strat in HIGHLIGHT:
+        if strat == "full_cache":
+            continue
+        xs, ys = [], []
+        for c in ctx_lengths:
+            strat_lat = sweep_lookup.get((strat, c))
+            base = full_cache_lat.get(c)
+            if strat_lat is not None and base and base > 0:
+                xs.append(c)
+                ys.append(100.0 * (base - strat_lat) / base)
+
+        lw = 2.2 if strat in BOLD else 1.2
+        alpha = 0.95 if strat in BOLD else 0.55
+        ax_bot.plot(xs, ys, color=_color(strat), linewidth=lw, alpha=alpha,
+                    linestyle="-", label=strat)
+
+    ax_bot.axhline(0, color="black", linewidth=0.8, alpha=0.4)
+    ax_bot.set_xscale("log")
+    ax_bot.set_xlabel("Context length (tokens, log scale)", fontsize=10)
+    ax_bot.set_ylabel("Latency savings vs full_cache (%)", fontsize=10)
+    ax_bot.set_title("How much faster is each strategy vs no compression?", fontsize=10)
+    ax_bot.grid(alpha=0.25)
+    ax_bot.legend(fontsize=7, loc="upper left", ncol=2)
+
+    # x-axis tick labels as round numbers
+    ax_bot.set_xticks(ctx_lengths)
+    ax_bot.set_xticklabels(
+        [f"{c//1024}K" if c >= 1024 else str(c) for c in ctx_lengths],
+        fontsize=8,
+    )
+
+    fig.tight_layout()
+    out3 = OUTPUT_DIR / "latency_vs_context_length.png"
+    fig.savefig(out3, dpi=200)
+    plt.close(fig)
+    print(f"Saved {out3}")
+
+
+# ===========================================================================
+# Plot 4: Pareto grid — all 16 hardware configs at 128K context
+# ===========================================================================
+# Each panel is one hardware config. Y-axis: real accuracy (fixed).
+# X-axis: simulated latency per decode step at 128K tokens (varies by hardware).
+# Panels sorted by ascending full_cache latency (fastest hardware top-left).
+# Each of the 12 strategies gets its own unique color so dots are identifiable.
+
+if not SWEEP_JSONL.exists():
+    print("Skipping plot 4: latency_context_sweep.jsonl not found")
+else:
+    LONG_CTX = 131072
+
+    # Unique color per strategy (tab20 gives 20 distinct colors)
+    _cmap = matplotlib.colormaps["tab20"].resampled(len(STRATEGY_ORDER))
+    STRAT_COLOR = {s: _cmap(i) for i, s in enumerate(STRATEGY_ORDER)}
+    STRAT_MARKER = {
+        "full_cache": "D", "full_cache_int8": "D",
+        "window_128": "o", "window_256": "o", "window_512": "o", "window_1024": "o",
+        "h2o_128": "s", "h2o_256": "s", "h2o_512": "s", "h2o_1024": "s",
+        "snapkv_512": "^", "expected_attn_512": "P",
+    }
+
+    # Per-strategy accuracy from real eval (same for every hardware panel)
+    strat_acc = {
+        name: sum(r["correct"] for r in rows_) / len(rows_)
+        for name, rows_ in by_strat.items()
+    }
+
+    # Build lookup: (hardware, strategy, context_length) -> mean_latency_ms
+    sweep_lat: dict[tuple, float] = {
+        (r["hardware"], r["strategy"], r["context_length"]): r["mean_latency_ms"]
+        for r in sweep_records
+    }
+
+    all_hw = sorted({r["hardware"] for r in sweep_records})
+
+    # Sort hardware panels by full_cache latency at 128K (fastest first)
+    hw_order = sorted(
+        all_hw,
+        key=lambda hw: sweep_lat.get((hw, "full_cache", LONG_CTX), float("inf")),
+    )
+
+    NCOLS = 4
+    NROWS = int(np.ceil(len(hw_order) / NCOLS))
+    fig, axes = plt.subplots(NROWS, NCOLS, figsize=(NCOLS * 4, NROWS * 3.5))
+    axes_flat = axes.flatten()
+
+    for i, hw_name in enumerate(hw_order):
+        ax = axes_flat[i]
+
+        for strat in STRATEGY_ORDER:
+            lat = sweep_lat.get((hw_name, strat, LONG_CTX))
+            acc = strat_acc.get(strat)
+            if lat is None or acc is None:
+                continue
+            ax.scatter(lat, acc,
+                       color=STRAT_COLOR[strat],
+                       marker=STRAT_MARKER.get(strat, "o"),
+                       s=70, zorder=3, edgecolors="white", linewidths=0.5)
+
+        ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
+        ax.set_ylim(0.20, 0.85)
+        ax.set_title(hw_name, fontsize=8, fontweight="bold")
+        ax.tick_params(labelsize=7)
+        ax.grid(alpha=0.2)
+
+        if i >= len(hw_order) - NCOLS:
+            ax.set_xlabel("ms/token", fontsize=7)
+        if i % NCOLS == 0:
+            ax.set_ylabel("Accuracy", fontsize=7)
+
+    # Hide unused panels
+    for j in range(len(hw_order), len(axes_flat)):
+        axes_flat[j].set_visible(False)
+
+    from matplotlib.lines import Line2D as _L2D
+    legend_elements = [
+        _L2D([0], [0],
+             marker=STRAT_MARKER.get(s, "o"),
+             color="w",
+             markerfacecolor=STRAT_COLOR[s],
+             markersize=9,
+             label=s)
+        for s in STRATEGY_ORDER
+    ]
+    fig.legend(
+        handles=legend_elements,
+        ncol=6,
+        fontsize=8,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.04),
+        frameon=True,
+        title="Strategy  (marker shape = family: ◆ baseline  ● window  ■ H2O  ▲ SnapKV  ✚ ExpAttn)",
+        title_fontsize=7.5,
+    )
+
+    fig.suptitle(
+        f"Pareto: real accuracy vs simulated latency — all 16 hardware configs, {LONG_CTX//1024}K token context\n"
+        "(panels sorted fastest → slowest; x-axis scale differs per panel)",
+        fontsize=10,
+    )
+    fig.tight_layout()
+    out4 = OUTPUT_DIR / "pareto_all_hardware.png"
+    fig.savefig(out4, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {out4}")
