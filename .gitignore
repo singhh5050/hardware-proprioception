@@ -18,3 +18,12 @@ venv/
 .mplconfig/
 .hf_home/
 eval_outputs*/
+eval_rerun*/
+*.log
+# Keep raw/intermediate JSONL out of git (large); final merged file is tracked
+accuracy_results.jsonl
+accuracy_results\ (1).jsonl
+old_combined.jsonl
+old_rescored.jsonl
+new_combined.jsonl
+new_rescored.jsonl
