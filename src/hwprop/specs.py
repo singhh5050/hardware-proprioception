@@ -629,6 +629,16 @@ def get_model_configs() -> dict[str, ModelConfig]:
     # Qwen 2.5  (dense, strong baselines)
     # =========================================================================
 
+    models["Qwen2.5-7B"] = ModelConfig(
+        name="Qwen2.5-7B",
+        num_layers=28,
+        d_model=3584,
+        num_heads=28,
+        num_kv_heads=4,        # GQA
+        d_ff=18944,
+        vocab_size=152064,
+    )
+
     models["Qwen2.5-14B"] = ModelConfig(
         name="Qwen2.5-14B",
         num_layers=48,
