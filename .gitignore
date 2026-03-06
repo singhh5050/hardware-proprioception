@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,22 +8,33 @@ build/
 *.egg
 .eggs/
 *.so
+
+# Environments
 .env
 .venv
 env/
 venv/
+
+# Tools
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-*.DS_Store
 .mplconfig/
+*.DS_Store
+
+# HuggingFace / model weights
 .hf_home/
+.hf_cache/
+.pip_cache/
+
+# Eval outputs (large, reproducible from scripts/)
 eval_outputs*/
 eval_rerun*/
 *.log
-# Keep raw/intermediate JSONL out of git (large); final merged file is tracked
-accuracy_results.jsonl
-accuracy_results\ (1).jsonl
+
+# Intermediate result files (final merged file lives in results/)
+accuracy_results*.jsonl
+!results/accuracy_results_final.jsonl
 old_combined.jsonl
 old_rescored.jsonl
 new_combined.jsonl
