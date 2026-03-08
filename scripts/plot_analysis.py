@@ -220,8 +220,7 @@ ax.set_xticklabels([lbl for *_, lbl in SPLIT_LABELS], fontsize=8)
 ax.set_ylabel("Mean latency per decode step (ms)", fontsize=10)
 ax.set_xlabel("KV cache tier placement split", fontsize=10)
 ax.set_title(
-    f"Tier Split Impact on Decode Latency — '{STRATEGY}'\n"
-    "(roofline simulation, Qwen2.5-7B, avg 619 decode steps)",
+    "Tier Split Impact on Decode Latency",
     fontsize=11,
 )
 ax.grid(alpha=0.25, axis="y")
@@ -437,8 +436,7 @@ else:
     )
 
     fig.suptitle(
-        f"Pareto: real accuracy vs simulated latency — all 16 hardware configs, {LONG_CTX//1024}K token context\n"
-        "(panels sorted fastest → slowest; x-axis scale differs per panel)",
+        f"Accuracy vs. Latency — 128K Token Context",
         fontsize=10,
     )
     fig.tight_layout()
@@ -446,3 +444,95 @@ else:
     fig.savefig(out4, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved {out4}")
+
+
+# ===========================================================================
+# Plot 5: Pareto grid — all 16 hardware, real eval context (~619 tokens)
+# ===========================================================================
+# Same structure as plot 4 but uses latency_simulation.jsonl (all-HBM split),
+# which was computed from actual mean prompt/decode lengths in the accuracy eval.
+
+REAL_LAT_JSONL = OUTPUT_DIR / "latency_simulation.jsonl"
+
+if not REAL_LAT_JSONL.exists():
+    print(f"Skipping plot 5: {REAL_LAT_JSONL} not found")
+else:
+    real_lat_records: list[dict] = []
+    with REAL_LAT_JSONL.open() as f:
+        for line in f:
+            real_lat_records.append(json.loads(line))
+
+    # All-HBM split only
+    real_lat_lookup: dict[tuple, float] = {
+        (r["hardware"], r["strategy"]): r["mean_latency_ms"]
+        for r in real_lat_records
+        if r["hbm_frac"] == 1.0 and r["cpu_frac"] == 0.0 and r["disk_frac"] == 0.0
+    }
+
+    all_hw_real = sorted({r["hardware"] for r in real_lat_records})
+    hw_order_real = sorted(
+        all_hw_real,
+        key=lambda hw: real_lat_lookup.get((hw, "full_cache"), float("inf")),
+    )
+
+    NCOLS = 4
+    NROWS = int(np.ceil(len(hw_order_real) / NCOLS))
+    fig, axes = plt.subplots(NROWS, NCOLS, figsize=(NCOLS * 4, NROWS * 3.5))
+    axes_flat = axes.flatten()
+
+    for i, hw_name in enumerate(hw_order_real):
+        ax = axes_flat[i]
+
+        for strat in STRATEGY_ORDER:
+            lat = real_lat_lookup.get((hw_name, strat))
+            acc = strat_acc.get(strat)
+            if lat is None or acc is None:
+                continue
+            ax.scatter(lat, acc,
+                       color=STRAT_COLOR[strat],
+                       marker=STRAT_MARKER.get(strat, "o"),
+                       s=70, zorder=3, edgecolors="white", linewidths=0.5)
+
+        ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
+        ax.set_ylim(0.20, 0.85)
+        ax.set_title(hw_name, fontsize=8, fontweight="bold")
+        ax.tick_params(labelsize=7)
+        ax.grid(alpha=0.2)
+
+        if i >= len(hw_order_real) - NCOLS:
+            ax.set_xlabel("ms/token", fontsize=7)
+        if i % NCOLS == 0:
+            ax.set_ylabel("Accuracy", fontsize=7)
+
+    for j in range(len(hw_order_real), len(axes_flat)):
+        axes_flat[j].set_visible(False)
+
+    legend_elements = [
+        _L2D([0], [0],
+             marker=STRAT_MARKER.get(s, "o"),
+             color="w",
+             markerfacecolor=STRAT_COLOR[s],
+             markersize=9,
+             label=s)
+        for s in STRATEGY_ORDER
+    ]
+    fig.legend(
+        handles=legend_elements,
+        ncol=6,
+        fontsize=8,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.04),
+        frameon=True,
+        title="Strategy  (marker shape = family: ◆ baseline  ● window  ■ H2O  ▲ SnapKV  ✚ ExpAttn)",
+        title_fontsize=7.5,
+    )
+
+    fig.suptitle(
+        "Accuracy vs. Latency — Real Eval Context (~619 tokens)",
+        fontsize=10,
+    )
+    fig.tight_layout()
+    out5 = OUTPUT_DIR / "pareto_all_hardware_real.png"
+    fig.savefig(out5, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {out5}")
