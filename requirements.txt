@@ -1,0 +1,25 @@
+# Core
+numpy>=2.0.0
+
+# Evaluation / plotting
+matplotlib
+datasets
+
+# GPU inference
+torch>=2.3
+accelerate
+transformers>=4.40
+safetensors
+
+# KV cache compression strategies
+kvpress>=0.5.0
+
+# KV cache quantization
+hqq
+optimum-quanto
+
+# Benchmarking
+ninja  # for CUDA extension builds (e.g. flash-attn)
+
+# Optional: flash attention (requires Ampere+ GPU, pip install flash-attn --no-build-isolation)
+# flash-attn
