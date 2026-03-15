@@ -1,0 +1,4 @@
+strategy,attn_impl,prompt_len,decode_steps,warmup_runs,timed_runs,measured_total_ms,measured_stdev_ms,measured_per_token_ms,simulated_total_ms,simulated_per_token_ms,ratio_measured_over_simulated,peak_memory_mb,hardware_key,model_config_key
+full_cache,sdpa,128,64,1,2,1763.22,7.23,27.55,418.24,6.435,4.282,14559.2,A100_80GB,Qwen2.5-7B
+window_512,sdpa,128,64,1,2,1936.5,3.31,30.258,418.24,6.435,4.702,14559.2,A100_80GB,Qwen2.5-7B
+snapkv_512,sdpa,128,64,1,2,1939.06,16.53,30.298,418.24,6.435,4.709,14559.2,A100_80GB,Qwen2.5-7B

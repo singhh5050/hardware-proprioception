@@ -312,6 +312,21 @@ def get_hardware_specs() -> dict[str, HardwareSpec]:
 
     # --- NVIDIA ----------------------------------------------------------------
 
+    specs["A100_40GB"] = HardwareSpec(
+        name="A100_40GB",
+        hbm_capacity=40 * GB,
+        hbm_bandwidth=1.555 * TB,     # 1555 GB/s HBM2e (SXM4-40GB)
+        cpu_ram_capacity=512 * GB,
+        cpu_gpu_bandwidth=64 * GB,    # PCIe Gen4 x16
+        fp16_flops=312 * TFLOPS,
+        int8_flops=624 * TFLOPS,
+        fp32_flops=19.5 * TFLOPS,
+        sram_capacity=40 * (1 << 20), # 40 MB L2
+        interconnect_bandwidth=600 * GB,  # NVLink 3
+        disk_capacity=2 * TB,
+        disk_bandwidth=5 * GB,
+    )
+
     specs["A100_80GB"] = HardwareSpec(
         name="A100_80GB",
         hbm_capacity=80 * GB,
