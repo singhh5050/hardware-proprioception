@@ -1,4 +1,9 @@
 strategy,attn_impl,prompt_len,decode_steps,warmup_runs,timed_runs,measured_total_ms,measured_stdev_ms,measured_per_token_ms,simulated_total_ms,simulated_per_token_ms,ratio_measured_over_simulated,peak_memory_mb,hardware_key,model_config_key
-full_cache,sdpa,128,64,1,2,1763.22,7.23,27.55,418.24,6.435,4.282,14559.2,A100_80GB,Qwen2.5-7B
-window_512,sdpa,128,64,1,2,1936.5,3.31,30.258,418.24,6.435,4.702,14559.2,A100_80GB,Qwen2.5-7B
-snapkv_512,sdpa,128,64,1,2,1939.06,16.53,30.298,418.24,6.435,4.709,14559.2,A100_80GB,Qwen2.5-7B
+full_cache,sdpa,7643,2048,1,2,55739.58,650.61,27.217,17879.94,8.561,3.179,15995.2,A100_40GB,Qwen2.5-7B
+full_cache_int8,sdpa,7643,2048,1,2,67377.45,116.21,32.899,17583.37,8.416,3.909,15799.2,A100_40GB,Qwen2.5-7B
+window_128,sdpa,7643,2048,1,2,61849.18,836.23,30.2,17295.88,8.276,3.649,15995.2,A100_40GB,Qwen2.5-7B
+window_256,sdpa,7643,2048,1,2,61116.05,13.86,29.842,17304.67,8.28,3.604,15995.2,A100_40GB,Qwen2.5-7B
+window_512,sdpa,7643,2048,1,2,61699.74,829.56,30.127,17322.25,8.289,3.635,15995.2,A100_40GB,Qwen2.5-7B
+window_1024,sdpa,7643,2048,1,2,61108.19,37.29,29.838,17357.42,8.306,3.592,15995.2,A100_40GB,Qwen2.5-7B
+snapkv_512,sdpa,7643,2048,1,2,61513.38,43.13,30.036,17321.98,8.289,3.624,15995.2,A100_40GB,Qwen2.5-7B
+expected_attn_512,sdpa,7643,2048,1,2,62485.41,258.48,30.51,17321.98,8.289,3.681,15995.2,A100_40GB,Qwen2.5-7B
