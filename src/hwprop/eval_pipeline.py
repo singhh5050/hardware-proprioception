@@ -42,6 +42,7 @@ def compute_strategy_latency(
     offload_frac: float = 0.0,
     disk_frac: float = 0.0,
     quantized: bool = False,
+    batch_size: int = 1,
 ) -> dict:
     """Simulate decode latency for a strategy on specific hardware.
 
@@ -54,7 +55,7 @@ def compute_strategy_latency(
     cost_model = CostModel(hardware, model_config)
 
     # Prefill cost
-    prefill_cost = cost_model.prefill_cost(prompt_len)
+    prefill_cost = cost_model.prefill_cost(prompt_len, batch_size=batch_size)
 
     # Initialize KV state: all prompt tokens in HBM
     kv = KVCacheState(
@@ -103,7 +104,7 @@ def compute_strategy_latency(
         kv.tokens_in_hbm += 1
 
         # Compute step cost
-        cost = cost_model.step_cost(kv)
+        cost = cost_model.step_cost(kv, batch_size=batch_size)
         step_times.append(cost.time_s)
 
     total_decode_s = sum(step_times)
