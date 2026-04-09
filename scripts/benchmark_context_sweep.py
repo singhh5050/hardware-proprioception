@@ -129,7 +129,7 @@ def get_gpu_memory_gb() -> float:
 
 
 # ---------------------------------------------------------------------------
-# Timed generation
+# Timed generation — prefill and decode separated
 # ---------------------------------------------------------------------------
 def run_timed_generation(
     model,
@@ -137,51 +137,75 @@ def run_timed_generation(
     decode_steps: int,
     warmup: int,
     repeats: int,
-) -> tuple[float, float, float, int]:
-    """Measure wall-clock decode latency.
+) -> dict:
+    """Measure wall-clock latency with prefill and decode timed separately.
 
-    Returns (mean_total_s, stdev_total_s, peak_memory_mb, actual_new_tokens).
+    Returns dict with prefill_ms, decode_ms, decode_per_token_ms, stdev, peak_memory_mb.
     """
     import torch
 
-    def _generate():
-        return model.generate(
-            input_ids,
-            max_new_tokens=decode_steps,
-            do_sample=False,
-        )
-
-    # Warmup
-    for i in range(warmup):
-        with torch.no_grad():
-            _generate()
+    def _prefill_and_decode(num_steps):
+        """Run prefill + decode loop, returning (prefill_s, decode_s, tokens_generated)."""
+        # Phase 1: Prefill
         torch.cuda.synchronize()
+        t_prefill = timeit.default_timer()
+        with torch.no_grad():
+            outputs = model(input_ids, use_cache=True)
+            past_kv = outputs.past_key_values
+            next_token = outputs.logits[:, -1:, :].argmax(dim=-1)
+        torch.cuda.synchronize()
+        prefill_s = timeit.default_timer() - t_prefill
+
+        # Phase 2: Decode (token-by-token with KV cache)
+        torch.cuda.synchronize()
+        t_decode = timeit.default_timer()
+        for _ in range(num_steps):
+            with torch.no_grad():
+                outputs = model(next_token, past_key_values=past_kv, use_cache=True)
+                past_kv = outputs.past_key_values
+                next_token = outputs.logits[:, -1:, :].argmax(dim=-1)
+        torch.cuda.synchronize()
+        decode_s = timeit.default_timer() - t_decode
+
+        return prefill_s, decode_s, num_steps
+
+    # Warmup (full prefill + decode cycle)
+    for i in range(warmup):
+        _prefill_and_decode(min(decode_steps, 4))  # short decode for warmup
         print(f"    warmup {i + 1}/{warmup} done")
 
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
     # Timed runs
-    times = []
-    actual_new_tokens = 0
+    prefill_times = []
+    decode_times = []
+    actual_tokens = 0
     for i in range(repeats):
-        torch.cuda.synchronize()
-        t0 = timeit.default_timer()
-        with torch.no_grad():
-            output = _generate()
-        torch.cuda.synchronize()
-        elapsed = timeit.default_timer() - t0
-        times.append(elapsed)
-        actual_new_tokens = output.shape[1] - input_ids.shape[1]
-        print(f"    run {i + 1}/{repeats}: {elapsed * 1000:.1f} ms ({actual_new_tokens} new tokens)")
+        prefill_s, decode_s, actual_tokens = _prefill_and_decode(decode_steps)
+        prefill_times.append(prefill_s)
+        decode_times.append(decode_s)
+        decode_per_tok = decode_s / actual_tokens * 1000
+        print(f"    run {i + 1}/{repeats}: prefill {prefill_s * 1000:.1f} ms, "
+              f"decode {decode_s * 1000:.1f} ms ({decode_per_tok:.2f} ms/tok)")
 
     peak_mb = 0.0
     if torch.cuda.is_available():
         peak_mb = torch.cuda.max_memory_allocated() / (1024**2)
 
-    mean_s = statistics.mean(times)
-    stdev_s = statistics.stdev(times) if len(times) > 1 else 0.0
-    return mean_s, stdev_s, peak_mb, actual_new_tokens
+    mean_prefill = statistics.mean(prefill_times)
+    mean_decode = statistics.mean(decode_times)
+    stdev_decode = statistics.stdev(decode_times) if len(decode_times) > 1 else 0.0
+
+    return {
+        "prefill_ms": mean_prefill * 1000,
+        "decode_ms": mean_decode * 1000,
+        "decode_per_token_ms": mean_decode / actual_tokens * 1000,
+        "decode_stdev_ms": stdev_decode * 1000,
+        "decode_stdev_per_token_ms": stdev_decode / actual_tokens * 1000,
+        "tokens_generated": actual_tokens,
+        "peak_memory_mb": peak_mb,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +248,7 @@ def plot_results(rows: list[dict], hw_key: str, output_dir: str):
         return
 
     ctx_lens = [r["context_length"] for r in rows]
-    measured = [r["measured_per_token_ms"] for r in rows]
+    measured = [r["decode_per_token_ms"] for r in rows]
     simulated = [r["simulated_per_token_ms"] for r in rows]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
@@ -365,6 +389,9 @@ def main() -> int:
         print(f"\n{'=' * 60}")
         print(f"Context length: {ctx_len:,} tokens")
 
+        # Clear GPU memory from previous context length
+        torch.cuda.empty_cache()
+
         # VRAM check
         est_gb = estimate_vram_gb(model_cfg, ctx_len + args.decode_steps)
         print(f"  Estimated peak VRAM: {est_gb:.1f} GB (GPU has {gpu_mem_gb:.1f} GB)")
@@ -382,7 +409,7 @@ def main() -> int:
         effective_warmup = min(args.warmup, 1) if ctx_len > 8192 else args.warmup
 
         try:
-            mean_s, stdev_s, peak_mb, actual_new = run_timed_generation(
+            timing = run_timed_generation(
                 model=model,
                 input_ids=input_ids,
                 decode_steps=args.decode_steps,
@@ -398,11 +425,10 @@ def main() -> int:
                 print("  Use --skip-oom to continue past OOM errors")
                 return 1
 
-        # Use actual generated tokens for per-token calculation
-        tokens_for_calc = actual_new if actual_new > 0 else args.decode_steps
-        measured_per_token_ms = (mean_s / tokens_for_calc) * 1000
+        tokens_for_calc = timing["tokens_generated"]
+        decode_per_token_ms = timing["decode_per_token_ms"]
 
-        # Simulation
+        # Simulation (decode-only, apples-to-apples)
         sim = run_simulation(
             hardware_key=hw_key,
             model_key=args.model_config,
@@ -411,24 +437,27 @@ def main() -> int:
         )
         simulated_per_token_ms = sim["mean_latency_ms"]
         ratio = (
-            measured_per_token_ms / simulated_per_token_ms
+            decode_per_token_ms / simulated_per_token_ms
             if simulated_per_token_ms > 0 else float("nan")
         )
 
-        print(f"  Measured:   {measured_per_token_ms:.3f} ms/token  (±{stdev_s * 1000:.1f} ms total)")
+        print(f"  Prefill:    {timing['prefill_ms']:.1f} ms")
+        print(f"  Decode:     {decode_per_token_ms:.3f} ms/token  "
+              f"(±{timing['decode_stdev_per_token_ms']:.3f} ms/token)")
         print(f"  Simulated:  {simulated_per_token_ms:.3f} ms/token")
         print(f"  Ratio:      {ratio:.2f}x")
-        print(f"  Peak VRAM:  {peak_mb:.0f} MB")
+        print(f"  Peak VRAM:  {timing['peak_memory_mb']:.0f} MB")
 
         rows.append({
             "context_length": actual_len,
             "decode_steps": tokens_for_calc,
-            "measured_total_ms": round(mean_s * 1000, 2),
-            "measured_stdev_ms": round(stdev_s * 1000, 2),
-            "measured_per_token_ms": round(measured_per_token_ms, 3),
+            "prefill_ms": round(timing["prefill_ms"], 2),
+            "decode_total_ms": round(timing["decode_ms"], 2),
+            "decode_per_token_ms": round(decode_per_token_ms, 3),
+            "decode_stdev_per_token_ms": round(timing["decode_stdev_per_token_ms"], 3),
             "simulated_per_token_ms": round(simulated_per_token_ms, 3),
             "ratio_measured_over_simulated": round(ratio, 3),
-            "peak_memory_mb": round(peak_mb, 1),
+            "peak_memory_mb": round(timing["peak_memory_mb"], 1),
             "hardware_key": hw_key,
             "model_config_key": args.model_config,
             "model_name": args.model,
@@ -440,18 +469,19 @@ def main() -> int:
         return 1
 
     # Summary table
-    print(f"\n{'=' * 80}")
-    print(f"{'Context':>10} {'Meas ms/tok':>12} {'Sim ms/tok':>12} {'Ratio':>8} {'Peak MB':>9}")
-    print("-" * 80)
+    print(f"\n{'=' * 90}")
+    print(f"{'Context':>10} {'Prefill ms':>11} {'Decode ms/tok':>14} {'Sim ms/tok':>12} {'Ratio':>8} {'Peak MB':>9}")
+    print("-" * 90)
     for row in rows:
         print(
             f"{row['context_length']:>10,} "
-            f"{row['measured_per_token_ms']:>12.3f} "
+            f"{row['prefill_ms']:>11.1f} "
+            f"{row['decode_per_token_ms']:>14.3f} "
             f"{row['simulated_per_token_ms']:>12.3f} "
             f"{row['ratio_measured_over_simulated']:>8.2f}x "
             f"{row['peak_memory_mb']:>9.0f}"
         )
-    print("=" * 80)
+    print("=" * 90)
 
     # Save CSV
     csv_path = os.path.join(args.output_dir, f"context_sweep_{hw_key}.csv")
