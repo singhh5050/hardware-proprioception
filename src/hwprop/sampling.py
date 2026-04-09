@@ -1,6 +1,6 @@
-"""Synthetic hardware sampler for RL training.
+"""Synthetic hardware sampler.
 
-Generates random HardwareSpec instances with log-uniform distributions
+Random HardwareSpec instances with log-uniform distributions
 spanning edge (Snapdragon) to datacenter (B300/MI350X) ranges.
 """
 
