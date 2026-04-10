@@ -173,22 +173,23 @@ class LLMSimulator:
 
         self._cost_model = CostModel(hardware, model)
         self._engine = EvictionEngine()
+        self._kv_head_layers = model.num_kv_heads * model.num_layers
 
     def step_cost(self, kv_state: KVCacheState) -> SimStepCost:
         """Compute corrected cost for one decode step at the given KV state.
 
         This is the core method. It:
           1. Calls CostModel.step_cost() to get the roofline time.
-          2. Applies OverheadProfile.corrected_time() to add overhead components.
+          2. Applies OverheadProfile.corrected_time() with model-aware kv_head_layers.
           3. Decomposes the overhead into its constituent parts.
         """
         raw: StepCost = self._cost_model.step_cost(kv_state, self.batch_size)
         active = kv_state.active_tokens
 
         import math
-        t_scan  = self.overhead.attn_scan_coeff * active / max(self.overhead.fa_block_size, 1)
+        t_scan  = self.overhead.attn_scan_coeff * (active / max(self.overhead.fa_block_size, 1)) * self._kv_head_layers
         t_alloc = self.overhead.alloc_coeff * math.log2(max(active, 1))
-        t_total = self.overhead.corrected_time(raw.time_s, active)
+        t_total = self.overhead.corrected_time(raw.time_s, active, self._kv_head_layers)
 
         return SimStepCost(
             time_s=t_total,
@@ -210,9 +211,9 @@ class LLMSimulator:
         active = prompt_len
 
         import math
-        t_scan  = self.overhead.attn_scan_coeff * active / max(self.overhead.fa_block_size, 1)
+        t_scan  = self.overhead.attn_scan_coeff * (active / max(self.overhead.fa_block_size, 1)) * self._kv_head_layers
         t_alloc = self.overhead.alloc_coeff * math.log2(max(active, 1))
-        t_total = self.overhead.corrected_time(raw.time_s, active)
+        t_total = self.overhead.corrected_time(raw.time_s, active, self._kv_head_layers)
 
         return SimStepCost(
             time_s=t_total,
