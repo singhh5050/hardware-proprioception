@@ -133,13 +133,14 @@ class TestOverheadProfile:
         from hwprop.cost_model import CostModel
         cost_model = CostModel(H100, LLAMA_3B)
 
+        kv_head_layers = LLAMA_3B.num_kv_heads * LLAMA_3B.num_layers
         corrected_ratios = []
         for row in rows:
             n = row["context_length"]
             kv = KVCacheState(seq_len=n, tokens_in_hbm=n, tokens_in_hbm_quantized=0,
                               tokens_in_cpu=0, tokens_on_disk=0, tokens_evicted=0)
             raw = cost_model.step_cost(kv)
-            t_corr = OVERHEAD_H100_FLASH2.corrected_time(raw.time_s, n)
+            t_corr = OVERHEAD_H100_FLASH2.corrected_time(raw.time_s, n, kv_head_layers)
             t_meas = row["measured_per_token_ms"] / 1000.0
             corrected_ratios.append(t_meas / t_corr)
 

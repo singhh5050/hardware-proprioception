@@ -7,7 +7,9 @@ is 3–20x slower due to:
                                (constant per step, hardware-class-specific)
   2. Flash Attention tile scan — FA processes K/V in fixed-size blocks (tiles).
                                For autoregressive decode the outer tile loop is
-                               serial; cost ∝ N / fa_block_size per head per layer.
+                               serial; cost ∝ (N / fa_block_size)^exponent per head per layer.
+                               Empirically exponent ≈ 1.5 for H100 FA2 (superlinear due to
+                               cache pressure and pipeline stalls at large N).
   3. Memory allocator pressure — torch allocator overhead at large KV histories;
                                cost ∝ log2(N) (minor, implementation-dependent)
 
@@ -15,23 +17,25 @@ The corrected per-step time is:
 
     t_sim = roofline_efficiency * t_roofline
             + launch_overhead_s
-            + attn_scan_coeff * (N / fa_block_size) * num_kv_heads * num_layers
+            + attn_scan_coeff * (N / fa_block_size)^attn_scan_exponent * num_kv_heads * num_layers
             + alloc_coeff * log2(max(N, 1))
 
 where:
-    N                = active tokens in attention this step
-    fa_block_size    = FA tile size in tokens (typically 64 for FA2 decode)
-    attn_scan_coeff  = seconds per head-layer tile iteration
-                       (~0.209 µs/head-layer-tile for H100 FA2)
-    num_kv_heads     = model.num_kv_heads  (GQA KV heads)
-    num_layers       = model.num_layers
+    N                   = active tokens in attention this step
+    fa_block_size       = FA tile size in tokens (typically 64 for FA2 decode)
+    attn_scan_coeff     = seconds per head-layer tile^exponent
+    attn_scan_exponent  = scan scaling exponent (1.0 = linear, 1.5 = empirical H100 FA2)
+    num_kv_heads        = model.num_kv_heads  (GQA KV heads)
+    num_layers          = model.num_layers
 
-Key design decision: attn_scan_coeff is in units of seconds per HEAD-LAYER tile,
-not per aggregate tile. This makes it hardware-specific but model-agnostic —
-the model's num_kv_heads × num_layers is multiplied in at call time by the
-simulator. Without this, the coefficient silently absorbs model architecture
-(e.g. calibrated on LLaMA-3.2-3B with 8×28=224 head-layer combos would be
-~3× too small for LLaMA-3.1-70B with 8×80=640 combos).
+Key design decisions:
+  - attn_scan_coeff is in units of seconds per HEAD-LAYER tile^exponent, not per
+    aggregate tile. This makes it hardware-specific but model-agnostic — the model's
+    num_kv_heads × num_layers is multiplied in at call time by the simulator.
+  - attn_scan_exponent > 1.0 captures the empirical superlinearity of FA2 decode at
+    large context lengths (cache pressure, pipeline stalls). Calibrated at 1.5 for H100
+    FA2 using an 8-point context sweep (1K–128K) on LLaMA-3.2-3B; errors drop from
+    ±34% (linear) to ±4% (superlinear) across the full range.
 
 Pre-calibrated profiles:
     OVERHEAD_H100_FLASH2  — H100 SXM with flash_attention_2  (calibrated, 8 pts)
@@ -64,13 +68,15 @@ class OverheadProfile:
     # Fixed per-step overhead: kernel launch, CUDA sync, Python dispatch.
     launch_overhead_s: float
 
-    # FA tile scan cost: seconds per HEAD-LAYER tile iteration.
-    # Total scan overhead = attn_scan_coeff * (N / fa_block_size) * num_kv_heads * num_layers
-    # ~0.209 µs/head-layer-tile for H100 FA2 (derived from 46.8 µs/aggregate-tile ÷ 224).
+    # FA tile scan cost: seconds per HEAD-LAYER tile^exponent.
+    # Total scan overhead = attn_scan_coeff * (N / fa_block_size)^attn_scan_exponent * num_kv_heads * num_layers
     attn_scan_coeff: float
 
     # Flash Attention tile size in tokens (FA2 decode default: 64).
     fa_block_size: int = 64
+
+    # Scan scaling exponent. 1.0 = linear in tile count; 1.5 = empirical H100 FA2.
+    attn_scan_exponent: float = 1.0
 
     # Memory allocator pressure: seconds per log2-token.
     alloc_coeff: float = 0.0
@@ -92,8 +98,9 @@ class OverheadProfile:
         Returns:
             Corrected wall-clock time estimate in seconds.
         """
+        tiles = (active_tokens / max(self.fa_block_size, 1)) ** self.attn_scan_exponent
         t_roofline = self.roofline_efficiency * roofline_time_s
-        t_scan  = self.attn_scan_coeff * (active_tokens / max(self.fa_block_size, 1)) * kv_head_layers
+        t_scan  = self.attn_scan_coeff * tiles * kv_head_layers
         t_alloc = self.alloc_coeff * math.log2(max(active_tokens, 1))
         return t_roofline + self.launch_overhead_s + t_scan + t_alloc
 
@@ -104,8 +111,9 @@ class OverheadProfile:
         kv_head_layers: int = 1,
     ) -> dict[str, float]:
         """Fractional contribution of each overhead component."""
+        tiles = (active_tokens / max(self.fa_block_size, 1)) ** self.attn_scan_exponent
         t_roofline = self.roofline_efficiency * roofline_time_s
-        t_scan  = self.attn_scan_coeff * (active_tokens / max(self.fa_block_size, 1)) * kv_head_layers
+        t_scan  = self.attn_scan_coeff * tiles * kv_head_layers
         t_alloc = self.alloc_coeff * math.log2(max(active_tokens, 1))
         total   = t_roofline + self.launch_overhead_s + t_scan + t_alloc
         if total == 0.0:
@@ -128,6 +136,7 @@ class OverheadProfile:
         name: str = "calibrated",
         fa_block_size: int = 64,
         kv_head_layers: int = 1,
+        attn_scan_exponent: float = 1.0,
     ) -> "OverheadProfile":
         """Fit overhead parameters from benchmark rows via non-negative least squares.
 
@@ -136,12 +145,14 @@ class OverheadProfile:
             simulated_per_token_ms  — roofline prediction per token (ms)
             context_length          — tokens (used as active_tokens proxy)
 
-        fa_block_size:  FA tile size in tokens (default 64).
-        kv_head_layers: model.num_kv_heads * model.num_layers for the benchmark model.
-                        The fitted attn_scan_coeff will be in per-head-layer-tile units.
-                        Default 1 → coefficient absorbs model structure (old behaviour).
+        fa_block_size:       FA tile size in tokens (default 64).
+        kv_head_layers:      model.num_kv_heads * model.num_layers for the benchmark model.
+                             The fitted attn_scan_coeff will be in per-head-layer-tile^exponent units.
+                             Default 1 → coefficient absorbs model structure (old behaviour).
+        attn_scan_exponent:  Exponent for the tile-count term. 1.0 = linear (default);
+                             1.5 matches empirical H100 FA2 behaviour.
 
-        Fits: t_measured = α*t_rf + β_launch + γ*(N/block*kv_head_layers) + δ*log2(N)
+        Fits: t_measured = α*t_rf + β_launch + γ*(N/block)^exponent*kv_head_layers + δ*log2(N)
         """
         if not rows:
             raise ValueError("calibrate() requires at least one benchmark row")
@@ -156,7 +167,7 @@ class OverheadProfile:
         for i, (trf, n) in enumerate(zip(t_rf, n_tokens)):
             A[i, 0] = trf
             A[i, 1] = 1.0
-            A[i, 2] = (n / max(fa_block_size, 1)) * kv_head_layers  # per-head-layer tiles
+            A[i, 2] = (n / max(fa_block_size, 1)) ** attn_scan_exponent * kv_head_layers
             A[i, 3] = math.log2(max(n, 1))
 
         b = np.array(measured, dtype=np.float64)
@@ -174,6 +185,7 @@ class OverheadProfile:
             launch_overhead_s=float(coeffs[1]),
             attn_scan_coeff=float(coeffs[2]),
             fa_block_size=fa_block_size,
+            attn_scan_exponent=attn_scan_exponent,
             alloc_coeff=float(coeffs[3]),
         )
 
@@ -188,6 +200,7 @@ class OverheadProfile:
         attn_impl: str = "flash_attention_2",
         roofline_efficiency: float = 0.7,
         fa_block_size: int = 64,
+        attn_scan_exponent: float = 1.5,
     ) -> "OverheadProfile":
         """Derive a default overhead profile from hardware specs.
 
@@ -196,14 +209,14 @@ class OverheadProfile:
         - attn_scan_coeff   ∝ 1/fp16_flops  (tensor-core throughput per tile)
           Both scaled from H100 SXM reference calibration.
 
-        The returned attn_scan_coeff is in per-head-layer-tile units.
+        The returned attn_scan_coeff is in per-head-layer-tile^exponent units.
         Multiply by num_kv_heads × num_layers when computing step cost.
         """
-        _REF_FP32_FLOPS = 67e12         # H100 SXM
-        _REF_FP16_FLOPS = 990e12        # H100 SXM
-        _REF_LAUNCH     = 0.01447       # s
-        _REF_SCAN_COEFF = 2.09e-7       # s/head-layer-tile  (4.683e-5 / 224)
-        _REF_ALLOC_COEFF = 4.8e-5
+        _REF_FP32_FLOPS  = 67e12        # H100 SXM
+        _REF_FP16_FLOPS  = 990e12       # H100 SXM
+        _REF_LAUNCH      = 0.016674     # s   (recalibrated)
+        _REF_SCAN_COEFF  = 4.926e-9     # s/head-layer-tile^1.5 (recalibrated, exponent=1.5)
+        _REF_ALLOC_COEFF = 0.0
 
         launch     = _REF_LAUNCH     * (_REF_FP32_FLOPS / max(hw.fp32_flops, 1e9))
         scan_coeff = _REF_SCAN_COEFF * (_REF_FP16_FLOPS / max(hw.fp16_flops, 1e9))
@@ -214,6 +227,7 @@ class OverheadProfile:
             launch_overhead_s=launch,
             attn_scan_coeff=scan_coeff,
             fa_block_size=fa_block_size,
+            attn_scan_exponent=attn_scan_exponent,
             alloc_coeff=_REF_ALLOC_COEFF,
         )
 
@@ -223,14 +237,16 @@ class OverheadProfile:
 # ---------------------------------------------------------------------------
 
 # H100 SXM · flash_attention_2 · calibrated on LLaMA-3.2-3B (8 KV heads, 28 layers)
-# attn_scan_coeff = 4.683e-5 s/aggregate-tile ÷ (8 × 28) = 2.09e-7 s/head-layer-tile
+# 8-point context sweep (1K–128K), NNLS fit with attn_scan_exponent=1.5.
+# Errors: ±4% across full range (vs ±34% with linear exponent=1.0).
 OVERHEAD_H100_FLASH2 = OverheadProfile(
     name="H100_SXM_flash_attention_2",
     roofline_efficiency=0.05,
-    launch_overhead_s=0.01447,
-    attn_scan_coeff=2.09e-7,     # 0.209 µs per head-layer tile
+    launch_overhead_s=0.016674,
+    attn_scan_coeff=4.926e-9,    # s per head-layer-tile^1.5
     fa_block_size=64,
-    alloc_coeff=4.8e-5,
+    attn_scan_exponent=1.5,
+    alloc_coeff=0.0,
 )
 
 # A100-40GB · SDPA · estimated from Qwen2.5-7B (4 KV heads, 28 layers) at 7643 tokens
