@@ -261,3 +261,18 @@ OVERHEAD_A100_SDPA = OverheadProfile(
     fa_block_size=64,
     alloc_coeff=4.8e-5,
 )
+
+# GH200 · SDPA · calibrated on LLaMA-3.2-3B (8 KV heads, 28 layers)
+# 9-point context sweep (1K–256K), NNLS fit with attn_scan_exponent=2.0.
+# Errors: ±1.6% in-sample, ±2.9% LOO CV. Quadratic exponent (vs H100 FA2's 1.5)
+# reflects SDPA's less optimised tiling — cache pressure grows faster with context.
+# Validated: 8-point fit extrapolated to 256K with -0.6% error before refit.
+OVERHEAD_GH200_SDPA = OverheadProfile(
+    name="GH200_sdpa",
+    roofline_efficiency=0.05,
+    launch_overhead_s=0.020003,
+    attn_scan_coeff=5.590e-11,   # s per head-layer-tile^2.0
+    fa_block_size=64,
+    attn_scan_exponent=2.0,
+    alloc_coeff=6.070e-4,
+)

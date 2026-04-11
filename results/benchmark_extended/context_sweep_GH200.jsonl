@@ -1,0 +1,1 @@
+{"context_length": 262144, "decode_steps": 128, "measured_total_ms": 30907.03, "measured_stdev_ms": 62.3, "measured_per_token_ms": 241.461, "simulated_per_token_ms": 8.299, "ratio_measured_over_simulated": 29.097, "peak_memory_mb": 53402.3, "hardware_key": "GH200", "model_config_key": "LLaMA-3.2-3B", "model_name": "meta-llama/Llama-3.2-3B", "attn_impl": "sdpa"}

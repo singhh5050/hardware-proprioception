@@ -36,7 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from hwprop.cost_model import CostModel, KVCacheState, StepCost
-from hwprop.overhead import OverheadProfile, OVERHEAD_H100_FLASH2, OVERHEAD_A100_SDPA
+from hwprop.overhead import OverheadProfile, OVERHEAD_H100_FLASH2, OVERHEAD_A100_SDPA, OVERHEAD_GH200_SDPA
 from hwprop.specs import HardwareSpec, ModelConfig, get_hardware_specs, get_model_configs
 from hwprop.strategy import KVCacheStrategy, EvictionEngine, STRATEGY_REGISTRY, get_strategy
 
@@ -374,6 +374,8 @@ def simulate_latency(
         prof = OVERHEAD_H100_FLASH2
     elif isinstance(hardware, str) and hardware == "A100_40GB":
         prof = OVERHEAD_A100_SDPA
+    elif isinstance(hardware, str) and hardware == "GH200":
+        prof = OVERHEAD_GH200_SDPA
     else:
         prof = OverheadProfile.for_hardware(hw)
 

@@ -35,6 +35,7 @@ os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.getcwd(), ".mplconfig"))
 # Hardware auto-detection
 # ---------------------------------------------------------------------------
 _GPU_NAME_TO_HW_KEY = [
+    ("gh200", "GH200"),
     ("h200",  "H200"),
     ("h100",  "H100_SXM"),
     ("b200",  "B200"),

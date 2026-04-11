@@ -357,6 +357,21 @@ def get_hardware_specs() -> dict[str, HardwareSpec]:
         disk_bandwidth=5 * GB,
     )
 
+    specs["GH200"] = HardwareSpec(
+        name="GH200",
+        hbm_capacity=96 * GB,
+        hbm_bandwidth=4.0 * TB,        # 4000 GB/s HBM3e
+        cpu_ram_capacity=480 * GB,     # Grace CPU LPDDR5X
+        cpu_gpu_bandwidth=900 * GB,    # NVLink-C2C
+        fp16_flops=990 * TFLOPS,       # same Hopper die as H100 SXM
+        int8_flops=1979 * TFLOPS,
+        fp32_flops=67 * TFLOPS,
+        sram_capacity=50 * (1 << 20),
+        interconnect_bandwidth=900 * GB,
+        disk_capacity=2 * TB,
+        disk_bandwidth=5 * GB,
+    )
+
     specs["H200"] = HardwareSpec(
         name="H200",
         hbm_capacity=141 * GB,
