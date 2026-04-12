@@ -1,0 +1,9 @@
+context_length,decode_steps,measured_total_ms,measured_stdev_ms,measured_per_token_ms,simulated_per_token_ms,ratio_measured_over_simulated,peak_memory_mb,hardware_key,model_config_key,model_name,attn_impl
+1024,128,3414.53,32.71,26.676,3.831,6.963,6321.0,A100_40GB,LLaMA-3.2-3B,meta-llama/Llama-3.2-3B,sdpa
+2048,128,3432.76,21.98,26.818,3.9,6.877,6505.6,A100_40GB,LLaMA-3.2-3B,meta-llama/Llama-3.2-3B,sdpa
+4096,128,3512.52,6.58,27.442,4.037,6.797,6874.2,A100_40GB,LLaMA-3.2-3B,meta-llama/Llama-3.2-3B,sdpa
+8192,128,3628.49,36.0,28.348,4.312,6.574,7612.9,A100_40GB,LLaMA-3.2-3B,meta-llama/Llama-3.2-3B,sdpa
+16384,128,4053.42,2.95,31.667,4.861,6.514,9088.8,A100_40GB,LLaMA-3.2-3B,meta-llama/Llama-3.2-3B,sdpa
+32768,128,5224.78,38.18,40.819,5.96,6.848,12041.7,A100_40GB,LLaMA-3.2-3B,meta-llama/Llama-3.2-3B,sdpa
+65536,128,9205.86,16.64,71.921,8.158,8.816,17947.5,A100_40GB,LLaMA-3.2-3B,meta-llama/Llama-3.2-3B,sdpa
+131072,128,24445.35,17.99,190.979,12.554,15.212,29759.5,A100_40GB,LLaMA-3.2-3B,meta-llama/Llama-3.2-3B,sdpa

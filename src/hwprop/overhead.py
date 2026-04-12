@@ -259,27 +259,56 @@ class OverheadProfile:
         attn_impl: str = "flash_attention_2",
         roofline_efficiency: float = 1.0,
         fa_block_size: int = 64,
-        kv_bandwidth_alpha: float = 0.35,
-        kv_bandwidth_beta: float = 0.75,
     ) -> "OverheadProfile":
-        """Derive a default overhead profile from hardware specs.
+        """Derive an overhead profile for theoretical/unseen hardware from spec-sheet values.
 
-        For theoretical/unseen hardware, uses the physics-based effective KV bandwidth
-        model (kv_bandwidth_alpha/beta) rather than an empirical attn_scan_coeff term.
-        This assumes FA2-like attention where eviction actually saves bandwidth (no
-        GPU occupancy floor for small budgets).
+        Uses physics-based relationships calibrated across H100 FA2, GH200 SDPA, A100 SDPA
+        via 8-point context sweeps (1K–128K) with a corrected effective-bandwidth model
+        (rf_eff=1.0, attn_scan_coeff=0; all context dependence via kv_bandwidth_alpha/beta).
 
-        Physical assumptions:
-        - launch_overhead_s ∝ 1/fp32_flops  (host-side dispatch speed)
-        - kv_bandwidth_alpha=0.35, kv_bandwidth_beta=0.75: median of H100 and GH200
-          calibrations. Override with calibrated values for known hardware.
+        kv_bandwidth_alpha — fragmentation onset magnitude:
+          flash_attention_2: alpha = 0.807  (fixed; H100 calibration)
+          sdpa:              alpha = 1.4134e-7 × (hbm_bw/sram_cap)^1.257
+            Physically: higher BW/SRAM ratio → more KV fragmentation pressure per second.
+            Calibrated from GH200 (α=0.219, ratio=83886) and A100 (α=0.089, ratio=40763).
 
-        The roofline (param_time + effective_kv_time) is the primary predictor.
+        kv_bandwidth_beta — degradation onset sharpness:
+          flash_attention_2: beta = 0.600  (fixed; H100 calibration)
+          sdpa:              beta = 13.151 × (hbm_bw/sram_cap)^(-0.2526)
+            Calibrated from GH200 (β=0.750) and A100 (β=0.900).
+
+        launch_overhead_s (~15–25ms):
+          Hardware-constant within attn_impl class:
+            flash_attention_2: 15ms  (H100 calibration)
+            sdpa:              24ms  (mean of GH200=25ms, A100=23ms)
+
+        eviction_score_coeff ∝ 1/hbm_bw:
+          Scoring in window/h2o is memory-bandwidth bound (loads full KV to re-score).
+          k = coeff × hbm_bw ≈ 5.76e4 (within 6% on GH200 and A100).
+
+        press_hook_overhead_s (~2.6ms):
+          Python dispatch overhead from kvpress hook; hardware-independent.
+
+        Accuracy on calibration hardware (derived vs measured):
+            H100 FA2:  MAE 0.9%, max 1.9%
+            GH200 SDPA: MAE 2.9%, max 4.9%
+            A100 SDPA:  MAE 3.7%, max 6.3%
+
+        Note: assumes FA2-like eviction behavior (reducing KV budget saves time proportionally).
+        For SDPA hardware with a GPU occupancy floor, calibrate from a context + strategy sweep.
         """
-        _REF_FP32_FLOPS  = 67e12        # H100 SXM
-        _REF_LAUNCH      = 0.016674     # s   (recalibrated on H100 SXM)
-
-        launch = _REF_LAUNCH * (_REF_FP32_FLOPS / max(hw.fp32_flops, 1e9))
+        if attn_impl == "flash_attention_2":
+            alpha, beta = 0.807, 0.600
+            launch = 0.0154  # 15ms — H100 FA2 calibration
+        else:   # sdpa or unknown
+            # Power law from GH200 + A100 calibrations (BW/SRAM ratio drives fragmentation)
+            ratio = hw.hbm_bandwidth / max(hw.sram_capacity, 1)
+            alpha = 1.4134e-7 * ratio ** 1.257
+            beta  = 13.151 * ratio ** (-0.2526)
+            launch = 0.0245  # 24ms — mean of GH200 (25ms) and A100 (23ms)
+        press_hook = 0.0026  # 2.6ms — mean of GH200/A100, Python dispatch overhead
+        _K_SCORE = 5.76e4   # eviction_score_coeff × hbm_bw = constant
+        eviction_score = _K_SCORE / max(hw.hbm_bandwidth, 1.0)
 
         return cls(
             name=f"{hw.name}_{attn_impl}_derived",
@@ -289,8 +318,10 @@ class OverheadProfile:
             fa_block_size=fa_block_size,
             attn_scan_exponent=1.0,
             alloc_coeff=0.0,
-            kv_bandwidth_alpha=kv_bandwidth_alpha,
-            kv_bandwidth_beta=kv_bandwidth_beta,
+            press_hook_overhead_s=press_hook,
+            eviction_score_coeff=eviction_score,
+            kv_bandwidth_alpha=alpha,
+            kv_bandwidth_beta=beta,
         )
 
 
@@ -311,17 +342,46 @@ OVERHEAD_H100_FLASH2 = OverheadProfile(
     alloc_coeff=0.0,
 )
 
-# A100-40GB · SDPA · estimated from Qwen2.5-7B (4 KV heads, 28 layers) at 7643 tokens
-# attn_scan_coeff = 6.37e-5 s/aggregate-tile ÷ (4 × 28) = 5.69e-7 s/head-layer-tile
-# Note: SDPA is less efficient per tile than FA2; single context point so scan/launch
-# are degenerate — treat as approximate.
+# A100-40GB · SDPA · calibrated on LLaMA-3.2-3B (8 KV heads, 28 layers)
+#
+# Two profiles: 128-step (steady-state) and 64-step (short-run).
+# A100 shows a pronounced within-generation warm-up effect at long contexts, similar to
+# GH200 but more extreme: at 131K, 64-step latency is ~1.77x the 128-step average.
+#
+# OVERHEAD_A100_SDPA      — 128-step calibration (8 pts, 1K–128K). Use for long runs.
+# OVERHEAD_A100_SDPA_64   — 64-step calibration  (5 pts, 4K–128K). Use for short runs.
+#
+# attn_scan_exponent≈2.0 (vs 1.5 for H100 FA2): SDPA on A100 shows stronger superlinearity,
+# consistent with larger cache-pressure and pipeline stall effects vs FA2.
+#
+# Eviction overhead calibrated from 5-context × 4-strategy sweep at 64 steps:
+#   press_hook_overhead_s = mean of (snapkv_512 - full_cache) at 4K–32K ≈ 2.8ms
+#   eviction_score_coeff  = NNLS fit to (window - full_cache - hook) from 16K–131K
+# Note: model conservatively overpredicts snapkv latency at 131K by ~5% because
+# A100 SDPA has a weaker GPU occupancy floor than GH200 (KV bandwidth savings are
+# partially realized with small budgets at very long contexts).
 OVERHEAD_A100_SDPA = OverheadProfile(
-    name="A100_40GB_sdpa",
-    roofline_efficiency=0.05,
-    launch_overhead_s=0.02165,
-    attn_scan_coeff=5.69e-7,     # 0.569 µs per head-layer tile (SDPA > FA2 per tile)
+    name="A100_40GB_sdpa_128step",
+    roofline_efficiency=0.76,
+    launch_overhead_s=0.019635,
+    attn_scan_coeff=2.4173e-10,  # s per head-layer-tile^1.95  (8-pt fit, 1K–128K)
     fa_block_size=64,
-    alloc_coeff=4.8e-5,
+    attn_scan_exponent=1.95,
+    alloc_coeff=3.9012e-4,
+    press_hook_overhead_s=0.00278,
+    eviction_score_coeff=3.2013e-8,
+)
+
+OVERHEAD_A100_SDPA_64 = OverheadProfile(
+    name="A100_40GB_sdpa_64step",
+    roofline_efficiency=0.05,
+    launch_overhead_s=0.006180,
+    attn_scan_coeff=6.8713e-10,  # s per head-layer-tile^1.90  (5-pt fit, 4K–128K)
+    fa_block_size=64,
+    attn_scan_exponent=1.90,
+    alloc_coeff=1.8237e-3,
+    press_hook_overhead_s=0.00278,
+    eviction_score_coeff=3.2013e-8,
 )
 
 # GH200 · SDPA · calibrated on LLaMA-3.2-3B (8 KV heads, 28 layers)

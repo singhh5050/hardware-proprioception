@@ -10,7 +10,7 @@ import pytest
 
 from hwprop.specs import HardwareSpec, ModelConfig, get_hardware_specs, get_model_configs, GB, TFLOPS, TB
 from hwprop.cost_model import KVCacheState
-from hwprop.overhead import OverheadProfile, OVERHEAD_H100_FLASH2, OVERHEAD_A100_SDPA
+from hwprop.overhead import OverheadProfile, OVERHEAD_H100_FLASH2, OVERHEAD_A100_SDPA, OVERHEAD_A100_SDPA_64
 from hwprop.strategy import KVCacheStrategy, EvictionEngine, STRATEGY_REGISTRY, get_strategy
 from hwprop.simulator import LLMSimulator, SimStepCost, SimResult, simulate_latency
 
@@ -53,22 +53,29 @@ class TestOverheadProfile:
         assert prof.kv_bandwidth_alpha > 0   # physics-based bandwidth degradation
         assert prof.alloc_coeff >= 0
 
-    def test_for_hardware_higher_fp32_gives_lower_launch(self):
-        """Faster host dispatch → lower launch overhead."""
-        slow_gpu = HardwareSpec(
-            name="slow_gpu", hbm_capacity=80*GB, hbm_bandwidth=3.35*TB,
-            cpu_ram_capacity=512*GB, cpu_gpu_bandwidth=128*GB,
-            fp16_flops=312*TFLOPS, int8_flops=624*TFLOPS, fp32_flops=20*TFLOPS,
-            sram_capacity=50*(1<<20), interconnect_bandwidth=600*GB,
-        )
-        fast_gpu = HardwareSpec(
-            name="fast_gpu", hbm_capacity=80*GB, hbm_bandwidth=3.35*TB,
+    def test_for_hardware_uses_impl_specific_alpha(self):
+        """FA2 and SDPA should get different alpha/beta values."""
+        prof_fa2  = OverheadProfile.for_hardware(H100, attn_impl="flash_attention_2")
+        prof_sdpa = OverheadProfile.for_hardware(H100, attn_impl="sdpa")
+        assert prof_fa2.kv_bandwidth_alpha  > prof_sdpa.kv_bandwidth_alpha
+        assert prof_fa2.kv_bandwidth_beta   < prof_sdpa.kv_bandwidth_beta
+
+    def test_for_hardware_eviction_score_scales_with_hbm_bw(self):
+        """Eviction scoring is memory-bandwidth bound: coeff ∝ 1/hbm_bw."""
+        fast_bw = HardwareSpec(
+            name="fast_bw", hbm_capacity=80*GB, hbm_bandwidth=4.0*TB,
             cpu_ram_capacity=512*GB, cpu_gpu_bandwidth=128*GB,
             fp16_flops=990*TFLOPS, int8_flops=1979*TFLOPS, fp32_flops=67*TFLOPS,
             sram_capacity=50*(1<<20), interconnect_bandwidth=900*GB,
         )
-        assert (OverheadProfile.for_hardware(slow_gpu).launch_overhead_s >
-                OverheadProfile.for_hardware(fast_gpu).launch_overhead_s)
+        slow_bw = HardwareSpec(
+            name="slow_bw", hbm_capacity=80*GB, hbm_bandwidth=2.0*TB,
+            cpu_ram_capacity=512*GB, cpu_gpu_bandwidth=128*GB,
+            fp16_flops=312*TFLOPS, int8_flops=624*TFLOPS, fp32_flops=20*TFLOPS,
+            sram_capacity=50*(1<<20), interconnect_bandwidth=600*GB,
+        )
+        assert (OverheadProfile.for_hardware(slow_bw).eviction_score_coeff >
+                OverheadProfile.for_hardware(fast_bw).eviction_score_coeff)
 
     def test_calibrate_from_synthetic_data(self):
         """calibrate() should recover known parameters from synthetic rows."""
@@ -399,9 +406,12 @@ class TestSimulateLatency:
         assert result.overhead_name == OVERHEAD_H100_FLASH2.name
 
     def test_a100_uses_sdpa_profile(self):
-        result = simulate_latency("A100_40GB", "Qwen2.5-7B",
-                                  prompt_len=256, decode_steps=16)
-        assert result.overhead_name == OVERHEAD_A100_SDPA.name
+        result_short = simulate_latency("A100_40GB", "Qwen2.5-7B",
+                                        prompt_len=256, decode_steps=64)
+        assert result_short.overhead_name == OVERHEAD_A100_SDPA_64.name
+        result_long = simulate_latency("A100_40GB", "Qwen2.5-7B",
+                                       prompt_len=256, decode_steps=128)
+        assert result_long.overhead_name == OVERHEAD_A100_SDPA.name
 
     def test_custom_overhead(self):
         custom = OverheadProfile(
