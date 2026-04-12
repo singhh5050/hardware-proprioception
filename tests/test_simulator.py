@@ -49,11 +49,12 @@ class TestOverheadProfile:
         prof = OverheadProfile.for_hardware(H100)
         assert prof.roofline_efficiency > 0
         assert prof.launch_overhead_s > 0
-        assert prof.attn_scan_coeff > 0
+        assert prof.attn_scan_coeff == 0.0   # effective bandwidth model; no scan coeff
+        assert prof.kv_bandwidth_alpha > 0   # physics-based bandwidth degradation
         assert prof.alloc_coeff >= 0
 
-    def test_for_hardware_higher_fp16_gives_lower_scan(self):
-        """Faster tensor cores → lower per-tile scan cost."""
+    def test_for_hardware_higher_fp32_gives_lower_launch(self):
+        """Faster host dispatch → lower launch overhead."""
         slow_gpu = HardwareSpec(
             name="slow_gpu", hbm_capacity=80*GB, hbm_bandwidth=3.35*TB,
             cpu_ram_capacity=512*GB, cpu_gpu_bandwidth=128*GB,
@@ -66,8 +67,8 @@ class TestOverheadProfile:
             fp16_flops=990*TFLOPS, int8_flops=1979*TFLOPS, fp32_flops=67*TFLOPS,
             sram_capacity=50*(1<<20), interconnect_bandwidth=900*GB,
         )
-        assert (OverheadProfile.for_hardware(slow_gpu).attn_scan_coeff >
-                OverheadProfile.for_hardware(fast_gpu).attn_scan_coeff)
+        assert (OverheadProfile.for_hardware(slow_gpu).launch_overhead_s >
+                OverheadProfile.for_hardware(fast_gpu).launch_overhead_s)
 
     def test_calibrate_from_synthetic_data(self):
         """calibrate() should recover known parameters from synthetic rows."""

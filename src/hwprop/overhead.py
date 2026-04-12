@@ -36,10 +36,16 @@ Key design decisions:
     large context lengths (cache pressure, pipeline stalls). Calibrated at 1.5 for H100
     FA2 using an 8-point context sweep (1K–128K) on LLaMA-3.2-3B; errors drop from
     ±34% (linear) to ±4% (superlinear) across the full range.
+  - launch_overhead_s and alloc_coeff implicitly absorb model-specific overhead for the
+    calibration model. The profile is a (hardware × model_family) calibration — applying
+    it to a different architecture typically gives ~30% error. Run a new context sweep to
+    calibrate for a new model family; it takes ~5 minutes and 5–9 data points.
 
 Pre-calibrated profiles:
     OVERHEAD_H100_FLASH2  — H100 SXM with flash_attention_2  (calibrated, 8 pts)
     OVERHEAD_A100_SDPA    — A100-40GB with SDPA               (1 context pt, estimated)
+    OVERHEAD_GH200_SDPA   — GH200 · SDPA · 128-step           (calibrated, 9 pts)
+    OVERHEAD_GH200_SDPA_64— GH200 · SDPA · 64-step            (calibrated, 5 pts)
 """
 
 from __future__ import annotations
@@ -55,7 +61,7 @@ from hwprop.specs import HardwareSpec
 
 @dataclass(frozen=True)
 class OverheadProfile:
-    """Calibrated overhead parameters for a (hardware, attention_impl) pair.
+    """Calibrated overhead parameters for a (hardware × model_family, attention_impl) pair.
 
     All time values in seconds.
     """
@@ -81,48 +87,99 @@ class OverheadProfile:
     # Memory allocator pressure: seconds per log2-token.
     alloc_coeff: float = 0.0
 
+    # Fixed overhead from kvpress hooks intercepting every forward pass.
+    # Applies to any eviction strategy (non-zero whenever seq_len > active_tokens).
+    # ~2ms for GH200 SDPA (calibrated from snapkv_512 - full_cache across contexts).
+    press_hook_overhead_s: float = 0.0
+
+    # Amortised scoring overhead for strategies that re-score ALL N tokens every
+    # decision_interval steps (e.g. window/h2o via DecodingPress). Per step:
+    #   t_scoring = eviction_score_coeff * (seq_len / decision_interval) * kv_head_layers
+    # Note: scaling is empirically superlinear (N^~2.3 from GH200 data), so this
+    # linear model underestimates at very long contexts and overestimates at short ones.
+    # Default 0.0 (full_cache or prefill-only strategies such as snapkv/expected_attn).
+    eviction_score_coeff: float = 0.0
+
+    # KV bandwidth degradation parameters (physics-based roofline correction).
+    # effective_kv_bw = hbm_bw / (1 + kv_bandwidth_alpha * (kv_bytes / sram_capacity)^kv_bandwidth_beta)
+    # When kv_bandwidth_alpha=0 (default), flat HBM bandwidth is used.
+    # kv_bandwidth_alpha: fragmentation severity — higher = more degradation at long context.
+    # kv_bandwidth_beta:  degradation onset sharpness (1.0 = linear, >1 = sharper onset).
+    kv_bandwidth_alpha: float = 0.0
+    kv_bandwidth_beta: float = 1.0
+
     def corrected_time(
         self,
         roofline_time_s: float,
         active_tokens: int,
         kv_head_layers: int = 1,
+        seq_len: int = 0,
+        decision_interval: int = 1,
     ) -> float:
         """Apply overhead correction to a roofline step time.
 
         Args:
-            roofline_time_s: Raw output of CostModel.step_cost().time_s.
-            active_tokens:   Number of tokens participating in attention this step.
-            kv_head_layers:  model.num_kv_heads * model.num_layers.
-                             Pass 1 (default) for a hardware-only estimate.
+            roofline_time_s:   Raw output of CostModel.step_cost().time_s.
+            active_tokens:     Tokens in attention this step (post-eviction budget).
+            kv_head_layers:    model.num_kv_heads * model.num_layers.
+            seq_len:           Full KV sequence length (pre-eviction). When seq_len >
+                               active_tokens the press_hook and eviction_score terms fire.
+                               Pass 0 or equal to active_tokens for full_cache.
+            decision_interval: Eviction frequency in steps; amortises scoring cost.
 
         Returns:
             Corrected wall-clock time estimate in seconds.
         """
-        tiles = (active_tokens / max(self.fa_block_size, 1)) ** self.attn_scan_exponent
-        t_roofline = self.roofline_efficiency * roofline_time_s
-        t_scan  = self.attn_scan_coeff * tiles * kv_head_layers
-        t_alloc = self.alloc_coeff * math.log2(max(active_tokens, 1))
-        return t_roofline + self.launch_overhead_s + t_scan + t_alloc
+        is_evicting = seq_len > active_tokens
+        # When evicting, use seq_len for scan and alloc costs, not active_tokens.
+        # Empirically, eviction strategies do not reduce attention or allocator cost:
+        #   - window/h2o (DecodingPress): scorer reads all N tokens every step
+        #   - snapkv/expected_attn: budget << GPU occupancy minimum on large chips,
+        #     so the attention kernel costs the same as full-N attention.
+        #   - alloc: the allocator still manages the full KV sequence even post-eviction;
+        #     using active_tokens=512 gives a spurious ~13ms savings at 128K context.
+        # The eviction_score_coeff captures EXTRA overhead for decode-time scoring
+        # (window/h2o) on top of this full-N baseline.
+        overhead_n  = seq_len if is_evicting else active_tokens
+        tiles = (max(overhead_n, 1) / max(self.fa_block_size, 1)) ** self.attn_scan_exponent
+        t_roofline  = self.roofline_efficiency * roofline_time_s
+        t_scan      = self.attn_scan_coeff * tiles * kv_head_layers
+        t_alloc     = self.alloc_coeff * math.log2(max(overhead_n, 1))
+        t_hook      = self.press_hook_overhead_s if is_evicting else 0.0
+        t_scoring   = (self.eviction_score_coeff
+                       * (seq_len / max(decision_interval, 1))
+                       * kv_head_layers) if is_evicting else 0.0
+        return t_roofline + self.launch_overhead_s + t_scan + t_alloc + t_hook + t_scoring
 
     def overhead_breakdown(
         self,
         roofline_time_s: float,
         active_tokens: int,
         kv_head_layers: int = 1,
+        seq_len: int = 0,
+        decision_interval: int = 1,
     ) -> dict[str, float]:
         """Fractional contribution of each overhead component."""
-        tiles = (active_tokens / max(self.fa_block_size, 1)) ** self.attn_scan_exponent
-        t_roofline = self.roofline_efficiency * roofline_time_s
-        t_scan  = self.attn_scan_coeff * tiles * kv_head_layers
-        t_alloc = self.alloc_coeff * math.log2(max(active_tokens, 1))
-        total   = t_roofline + self.launch_overhead_s + t_scan + t_alloc
+        is_evicting = seq_len > active_tokens
+        overhead_n  = seq_len if is_evicting else active_tokens
+        tiles = (max(overhead_n, 1) / max(self.fa_block_size, 1)) ** self.attn_scan_exponent
+        t_roofline  = self.roofline_efficiency * roofline_time_s
+        t_scan      = self.attn_scan_coeff * tiles * kv_head_layers
+        t_alloc     = self.alloc_coeff * math.log2(max(overhead_n, 1))
+        t_hook      = self.press_hook_overhead_s if is_evicting else 0.0
+        t_scoring   = (self.eviction_score_coeff
+                       * (seq_len / max(decision_interval, 1))
+                       * kv_head_layers) if is_evicting else 0.0
+        total = t_roofline + self.launch_overhead_s + t_scan + t_alloc + t_hook + t_scoring
         if total == 0.0:
-            return {"roofline": 0.0, "launch": 0.0, "attn_scan": 0.0, "alloc": 0.0}
+            return {"roofline": 0.0, "launch": 0.0, "attn_scan": 0.0, "alloc": 0.0, "hook": 0.0, "scoring": 0.0}
         return {
             "roofline":  t_roofline / total,
             "launch":    self.launch_overhead_s / total,
             "attn_scan": t_scan / total,
             "alloc":     t_alloc / total,
+            "hook":      t_hook / total,
+            "scoring":   t_scoring / total,
         }
 
     # ------------------------------------------------------------------
@@ -187,6 +244,8 @@ class OverheadProfile:
             fa_block_size=fa_block_size,
             attn_scan_exponent=attn_scan_exponent,
             alloc_coeff=float(coeffs[3]),
+            press_hook_overhead_s=0.0,   # calibrate separately from strategy sweep data
+            eviction_score_coeff=0.0,
         )
 
     # ------------------------------------------------------------------
@@ -198,37 +257,40 @@ class OverheadProfile:
         cls,
         hw: HardwareSpec,
         attn_impl: str = "flash_attention_2",
-        roofline_efficiency: float = 0.7,
+        roofline_efficiency: float = 1.0,
         fa_block_size: int = 64,
-        attn_scan_exponent: float = 1.5,
+        kv_bandwidth_alpha: float = 0.35,
+        kv_bandwidth_beta: float = 0.75,
     ) -> "OverheadProfile":
         """Derive a default overhead profile from hardware specs.
 
+        For theoretical/unseen hardware, uses the physics-based effective KV bandwidth
+        model (kv_bandwidth_alpha/beta) rather than an empirical attn_scan_coeff term.
+        This assumes FA2-like attention where eviction actually saves bandwidth (no
+        GPU occupancy floor for small budgets).
+
         Physical assumptions:
         - launch_overhead_s ∝ 1/fp32_flops  (host-side dispatch speed)
-        - attn_scan_coeff   ∝ 1/fp16_flops  (tensor-core throughput per tile)
-          Both scaled from H100 SXM reference calibration.
+        - kv_bandwidth_alpha=0.35, kv_bandwidth_beta=0.75: median of H100 and GH200
+          calibrations. Override with calibrated values for known hardware.
 
-        The returned attn_scan_coeff is in per-head-layer-tile^exponent units.
-        Multiply by num_kv_heads × num_layers when computing step cost.
+        The roofline (param_time + effective_kv_time) is the primary predictor.
         """
         _REF_FP32_FLOPS  = 67e12        # H100 SXM
-        _REF_FP16_FLOPS  = 990e12       # H100 SXM
-        _REF_LAUNCH      = 0.016674     # s   (recalibrated)
-        _REF_SCAN_COEFF  = 4.926e-9     # s/head-layer-tile^1.5 (recalibrated, exponent=1.5)
-        _REF_ALLOC_COEFF = 0.0
+        _REF_LAUNCH      = 0.016674     # s   (recalibrated on H100 SXM)
 
-        launch     = _REF_LAUNCH     * (_REF_FP32_FLOPS / max(hw.fp32_flops, 1e9))
-        scan_coeff = _REF_SCAN_COEFF * (_REF_FP16_FLOPS / max(hw.fp16_flops, 1e9))
+        launch = _REF_LAUNCH * (_REF_FP32_FLOPS / max(hw.fp32_flops, 1e9))
 
         return cls(
             name=f"{hw.name}_{attn_impl}_derived",
             roofline_efficiency=roofline_efficiency,
             launch_overhead_s=launch,
-            attn_scan_coeff=scan_coeff,
+            attn_scan_coeff=0.0,
             fa_block_size=fa_block_size,
-            attn_scan_exponent=attn_scan_exponent,
-            alloc_coeff=_REF_ALLOC_COEFF,
+            attn_scan_exponent=1.0,
+            alloc_coeff=0.0,
+            kv_bandwidth_alpha=kv_bandwidth_alpha,
+            kv_bandwidth_beta=kv_bandwidth_beta,
         )
 
 
@@ -263,16 +325,52 @@ OVERHEAD_A100_SDPA = OverheadProfile(
 )
 
 # GH200 · SDPA · calibrated on LLaMA-3.2-3B (8 KV heads, 28 layers)
-# 9-point context sweep (1K–256K), NNLS fit with attn_scan_exponent=2.0.
-# Errors: ±1.6% in-sample, ±2.9% LOO CV. Quadratic exponent (vs H100 FA2's 1.5)
-# reflects SDPA's less optimised tiling — cache pressure grows faster with context.
-# Validated: 8-point fit extrapolated to 256K with -0.6% error before refit.
+#
+# Two profiles: 128-step (steady-state) and 64-step (short-run).
+# GH200 shows a within-generation warm-up effect at long contexts — the first ~64
+# decode steps are ~1.5–2x slower per token than later steps, likely due to KV cache
+# reallocation or CUDA scheduling at large allocations. The 128-step profile averages
+# over both regimes and is more representative of production workloads.
+#
+# OVERHEAD_GH200_SDPA      — 128-step calibration (9 pts, 1K–128K). Use for long runs.
+# OVERHEAD_GH200_SDPA_64   — 64-step calibration  (5 pts, 4K–128K). Use for short runs.
+#
+# Note: kv_bandwidth_alpha=0 on both profiles (effective bandwidth not used). GH200 SDPA
+# has a GPU occupancy floor: even with budget=512 eviction, attention costs ≈ full-N
+# because the small grid under-utilizes GPU compute units. This is captured by the
+# empirical attn_scan_coeff * N^2.0 term (with overhead_n=seq_len when evicting).
+# The physics-based effective bandwidth model applies to hardware where attention is
+# purely bandwidth-limited (e.g. FA2 with proper sparse eviction); set
+# kv_bandwidth_alpha > 0 and attn_scan_coeff=0 for those profiles.
+#
+# Eviction overhead calibrated from 5-context × 4-strategy sweep at 64 steps:
+#   press_hook_overhead_s: mean of (snapkv_512 - full_cache) ≈ 2.5ms (all strategies)
+#   eviction_score_coeff:  linear fit to (window/h2o - snapkv) from 32K+ data
+#                          True scaling is ~N^2.3; linear model is approximate.
 OVERHEAD_GH200_SDPA = OverheadProfile(
-    name="GH200_sdpa",
+    name="GH200_sdpa_128step",
     roofline_efficiency=0.05,
-    launch_overhead_s=0.020003,
-    attn_scan_coeff=5.590e-11,   # s per head-layer-tile^2.0
+    launch_overhead_s=0.019603,
+    attn_scan_coeff=5.549e-11,   # s per head-layer-tile^2.0  (9-pt fit, 1K–256K)
     fa_block_size=64,
     attn_scan_exponent=2.0,
-    alloc_coeff=6.070e-4,
+    alloc_coeff=6.406e-4,
+    press_hook_overhead_s=0.00246,
+    eviction_score_coeff=1.382e-8,
+    kv_bandwidth_alpha=0.0,      # occupancy floor captured by attn_scan_coeff instead
+    kv_bandwidth_beta=1.0,
+)
+
+OVERHEAD_GH200_SDPA_64 = OverheadProfile(
+    name="GH200_sdpa_64step",
+    roofline_efficiency=0.05,
+    launch_overhead_s=0.006611,
+    attn_scan_coeff=1.096e-10,   # s per head-layer-tile^2.0  (5-pt fit, 4K–128K)
+    fa_block_size=64,
+    attn_scan_exponent=2.0,
+    alloc_coeff=1.690e-3,
+    press_hook_overhead_s=0.00246,
+    eviction_score_coeff=1.382e-8,
+    kv_bandwidth_alpha=0.0,      # occupancy floor captured by attn_scan_coeff instead
+    kv_bandwidth_beta=1.0,
 )

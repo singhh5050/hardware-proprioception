@@ -36,7 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from hwprop.cost_model import CostModel, KVCacheState, StepCost
-from hwprop.overhead import OverheadProfile, OVERHEAD_H100_FLASH2, OVERHEAD_A100_SDPA, OVERHEAD_GH200_SDPA
+from hwprop.overhead import OverheadProfile, OVERHEAD_H100_FLASH2, OVERHEAD_A100_SDPA, OVERHEAD_GH200_SDPA, OVERHEAD_GH200_SDPA_64
 from hwprop.specs import HardwareSpec, ModelConfig, get_hardware_specs, get_model_configs
 from hwprop.strategy import KVCacheStrategy, EvictionEngine, STRATEGY_REGISTRY, get_strategy
 
@@ -171,7 +171,11 @@ class LLMSimulator:
         self.strategy = strategy if strategy is not None else KVCacheStrategy.full_cache()
         self.batch_size = batch_size
 
-        self._cost_model = CostModel(hardware, model)
+        self._cost_model = CostModel(
+            hardware, model,
+            kv_bandwidth_alpha=self.overhead.kv_bandwidth_alpha,
+            kv_bandwidth_beta=self.overhead.kv_bandwidth_beta,
+        )
         self._engine = EvictionEngine()
         self._kv_head_layers = model.num_kv_heads * model.num_layers
 
@@ -185,11 +189,16 @@ class LLMSimulator:
         """
         raw: StepCost = self._cost_model.step_cost(kv_state, self.batch_size)
         active = kv_state.active_tokens
+        seq_len = kv_state.seq_len
+        interval = self.strategy.decision_interval
 
         import math
-        t_scan  = self.overhead.attn_scan_coeff * (active / max(self.overhead.fa_block_size, 1)) * self._kv_head_layers
+        tiles = (active / max(self.overhead.fa_block_size, 1)) ** self.overhead.attn_scan_exponent
+        t_scan  = self.overhead.attn_scan_coeff * tiles * self._kv_head_layers
         t_alloc = self.overhead.alloc_coeff * math.log2(max(active, 1))
-        t_total = self.overhead.corrected_time(raw.time_s, active, self._kv_head_layers)
+        t_total = self.overhead.corrected_time(
+            raw.time_s, active, self._kv_head_layers, seq_len=seq_len, decision_interval=interval,
+        )
 
         return SimStepCost(
             time_s=t_total,
@@ -211,7 +220,8 @@ class LLMSimulator:
         active = prompt_len
 
         import math
-        t_scan  = self.overhead.attn_scan_coeff * (active / max(self.overhead.fa_block_size, 1)) * self._kv_head_layers
+        tiles = (active / max(self.overhead.fa_block_size, 1)) ** self.overhead.attn_scan_exponent
+        t_scan  = self.overhead.attn_scan_coeff * tiles * self._kv_head_layers
         t_alloc = self.overhead.alloc_coeff * math.log2(max(active, 1))
         t_total = self.overhead.corrected_time(raw.time_s, active, self._kv_head_layers)
 
@@ -375,7 +385,7 @@ def simulate_latency(
     elif isinstance(hardware, str) and hardware == "A100_40GB":
         prof = OVERHEAD_A100_SDPA
     elif isinstance(hardware, str) and hardware == "GH200":
-        prof = OVERHEAD_GH200_SDPA
+        prof = OVERHEAD_GH200_SDPA_64 if decode_steps <= 64 else OVERHEAD_GH200_SDPA
     else:
         prof = OverheadProfile.for_hardware(hw)
 

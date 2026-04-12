@@ -5,6 +5,19 @@ Implements the core roofline model:
   - MLP is memory-bound when batch_size < B_crit, compute-bound above.
   - Quantized KV entries use half the bytes but same compute (dequantize on the fly).
   - HBM loads and compute overlap (roofline: max); CPU and disk transfers are additive (blocking).
+
+KV bandwidth degradation model:
+  At short context, the KV cache fits in L2 and access is fast. At long context, KV entries
+  for different heads/layers are scattered across HBM — the memory controller chases fragments
+  instead of bulk-streaming — and effective bandwidth drops well below spec. This is modeled as:
+
+      effective_kv_bw = hbm_bw / (1 + kv_bandwidth_alpha × (kv_bytes / sram_capacity)^kv_bandwidth_beta)
+
+  The base roofline uses spec HBM bandwidth for model-weight loads (always sequential) and
+  effective_kv_bw for KV cache loads. When kv_bandwidth_alpha=0 (default), reduces to flat BW.
+
+  kv_bandwidth_alpha and kv_bandwidth_beta are hardware+attention-impl specific and are
+  supplied by OverheadProfile (calibrated) rather than read from HardwareSpec (spec-sheet only).
 """
 
 from __future__ import annotations
@@ -64,9 +77,17 @@ class KVCacheState:
 class CostModel:
     """Stateless analytical cost model for a (hardware, model) pair."""
 
-    def __init__(self, hardware: HardwareSpec, model: ModelConfig) -> None:
+    def __init__(
+        self,
+        hardware: HardwareSpec,
+        model: ModelConfig,
+        kv_bandwidth_alpha: float = 0.0,
+        kv_bandwidth_beta: float = 1.0,
+    ) -> None:
         self.hw = hardware
         self.model = model
+        self.kv_bandwidth_alpha = kv_bandwidth_alpha
+        self.kv_bandwidth_beta = kv_bandwidth_beta
 
     def step_cost(self, kv_state: KVCacheState, batch_size: int = 1) -> StepCost:
         """Cost of generating one token given current KV occupancy.
@@ -91,7 +112,14 @@ class CostModel:
             + kv_state.tokens_in_hbm_quantized * kv_int8_per_layer
         ) * L * batch_size
 
-        memory_time = (param_bytes + hbm_kv_bytes) / hw.hbm_bandwidth
+        param_time = param_bytes / hw.hbm_bandwidth
+        if self.kv_bandwidth_alpha > 0 and hw.sram_capacity > 0:
+            ratio = hbm_kv_bytes / hw.sram_capacity
+            effective_kv_bw = hw.hbm_bandwidth / (1 + self.kv_bandwidth_alpha * ratio ** self.kv_bandwidth_beta)
+        else:
+            effective_kv_bw = hw.hbm_bandwidth
+        kv_time = hbm_kv_bytes / effective_kv_bw if effective_kv_bw > 0 else 0.0
+        memory_time = param_time + kv_time
 
         # --- CPU transfer (additive — blocks on PCIe) ---
         cpu_kv_bytes = kv_state.tokens_in_cpu * kv_fp16_per_layer * L * batch_size

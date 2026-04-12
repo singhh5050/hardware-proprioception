@@ -52,7 +52,7 @@ class TestHardwareSpecs:
 
     def test_catalog_has_16_entries(self):
         specs = get_hardware_specs()
-        assert len(specs) == 16
+        assert len(specs) == 18
 
     def test_catalog_has_expected_keys(self):
         specs = get_hardware_specs()
@@ -140,7 +140,7 @@ class TestModelConfigs:
 
     def test_catalog_has_14_entries(self):
         models = get_model_configs()
-        assert len(models) == 14
+        assert len(models) == 15
 
     def test_qwen25_72b_param_count(self):
         m = get_model_configs()["Qwen2.5-72B"]
