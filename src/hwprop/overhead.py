@@ -262,49 +262,47 @@ class OverheadProfile:
     ) -> "OverheadProfile":
         """Derive an overhead profile for theoretical/unseen hardware from spec-sheet values.
 
-        Uses physics-based relationships calibrated across H100 FA2, GH200 SDPA, A100 SDPA
-        via 8-point context sweeps (1K–128K) with a corrected effective-bandwidth model
-        (rf_eff=1.0, attn_scan_coeff=0; all context dependence via kv_bandwidth_alpha/beta).
+        Uses physics-based relationships calibrated across H100/H200/RTX 5090 FA2 and
+        GH200/A100 SDPA via 8-point context sweeps (1K–128K), effective-bandwidth model
+        (rf_eff=1.0, attn_scan_coeff=0; context dependence captured by alpha/beta).
 
-        kv_bandwidth_alpha — fragmentation onset magnitude:
-          flash_attention_2: alpha = 0.807  (fixed; H100 calibration)
-          sdpa:              alpha = 1.4134e-7 × (hbm_bw/sram_cap)^1.257
-            Physically: higher BW/SRAM ratio → more KV fragmentation pressure per second.
-            Calibrated from GH200 (α=0.219, ratio=83886) and A100 (α=0.089, ratio=40763).
+        flash_attention_2 — fixed constants (mean of H100, H200, RTX 5090 calibrations):
+          alpha  ≈ 0.863  (0.807/0.879/0.903 — nearly constant across architectures)
+          beta   ≈ 0.617  (0.600/0.650/0.600)
+          launch ≈ 16ms   (15.4/18.6/15.0ms)
+          A ratio-based power law was tried but failed to generalize across architecture
+          families (Hopper SXM vs consumer Blackwell GDDR7). Fixed constants give ~8% MAE.
 
-        kv_bandwidth_beta — degradation onset sharpness:
-          flash_attention_2: beta = 0.600  (fixed; H100 calibration)
-          sdpa:              beta = 13.151 × (hbm_bw/sram_cap)^(-0.2526)
-            Calibrated from GH200 (β=0.750) and A100 (β=0.900).
-
-        launch_overhead_s (~15–25ms):
-          Hardware-constant within attn_impl class:
-            flash_attention_2: 15ms  (H100 calibration)
-            sdpa:              24ms  (mean of GH200=25ms, A100=23ms)
+        sdpa — power law in hbm_bw/sram_cap (calibrated from GH200 and A100):
+          alpha  = 1.413e-7 × ratio^1.257  (higher BW/SRAM → more fragmentation)
+          beta   = 13.151   × ratio^(-0.2526)
+          launch = 24ms mean (GH200=25ms, A100=23ms)
+          Validated by LOO: ~4–6% MAE on held-out NVIDIA Ampere/Hopper hardware.
 
         eviction_score_coeff ∝ 1/hbm_bw:
-          Scoring in window/h2o is memory-bandwidth bound (loads full KV to re-score).
+          Scoring in window/h2o is memory-bandwidth bound.
           k = coeff × hbm_bw ≈ 5.76e4 (within 6% on GH200 and A100).
 
-        press_hook_overhead_s (~2.6ms):
-          Python dispatch overhead from kvpress hook; hardware-independent.
+        press_hook_overhead_s (~2.6ms): Python dispatch, hardware-independent.
 
-        Accuracy on calibration hardware (derived vs measured):
-            H100 FA2:  MAE 0.9%, max 1.9%
-            GH200 SDPA: MAE 2.9%, max 4.9%
-            A100 SDPA:  MAE 3.7%, max 6.3%
+        Expected generalization error on truly unseen hardware:
+            FA2:  ~8% MAE  (fixed constants; architecture-agnostic prior)
+            SDPA: ~4–6% MAE (power law; validated within NVIDIA Ampere/Hopper only)
 
         Note: assumes FA2-like eviction behavior (reducing KV budget saves time proportionally).
         For SDPA hardware with a GPU occupancy floor, calibrate from a context + strategy sweep.
         """
+        ratio = hw.hbm_bandwidth / max(hw.sram_capacity, 1)
         if attn_impl == "flash_attention_2":
-            alpha, beta = 0.807, 0.600
-            launch = 0.0154  # 15ms — H100 FA2 calibration
+            # Fixed constants — mean of H100 SXM, H200 SXM, RTX 5090 calibrations.
+            # ratio-based power law failed to generalize across architecture families.
+            alpha  = 0.863
+            beta   = 0.617
+            launch = 0.0164  # 16ms mean
         else:   # sdpa or unknown
             # Power law from GH200 + A100 calibrations (BW/SRAM ratio drives fragmentation)
-            ratio = hw.hbm_bandwidth / max(hw.sram_capacity, 1)
-            alpha = 1.4134e-7 * ratio ** 1.257
-            beta  = 13.151 * ratio ** (-0.2526)
+            alpha  = 1.4134e-7 * ratio ** 1.257
+            beta   = 13.151    * ratio ** (-0.2526)
             launch = 0.0245  # 24ms — mean of GH200 (25ms) and A100 (23ms)
         press_hook = 0.0026  # 2.6ms — mean of GH200/A100, Python dispatch overhead
         _K_SCORE = 5.76e4   # eviction_score_coeff × hbm_bw = constant
@@ -340,6 +338,38 @@ OVERHEAD_H100_FLASH2 = OverheadProfile(
     fa_block_size=64,
     attn_scan_exponent=1.5,
     alloc_coeff=0.0,
+)
+
+# H200 SXM · flash_attention_2 · calibrated on LLaMA-3.2-3B (8 KV heads, 28 layers)
+# 8-point context sweep (1K–128K), effective-bandwidth model (rf_eff=1.0, attn_scan_coeff=0).
+# MAE 0.7%, max 1.8% across full range.
+OVERHEAD_H200_FLASH2 = OverheadProfile(
+    name="H200_SXM_flash_attention_2",
+    roofline_efficiency=1.0,
+    launch_overhead_s=0.018600,
+    attn_scan_coeff=0.0,
+    fa_block_size=64,
+    attn_scan_exponent=1.0,
+    alloc_coeff=0.0,
+    kv_bandwidth_alpha=0.87933,
+    kv_bandwidth_beta=0.650,
+)
+
+# RTX 5090 · flash_attention_2 · calibrated on LLaMA-3.2-3B (8 KV heads, 28 layers)
+# 7-point context sweep (1K–65K; 131K OOM on 32GB VRAM), effective-bandwidth model.
+# MAE 0.6%, max 1.0% across available range.
+# Note: alpha=0.903 is higher than H100/H200 despite lower BW/SRAM ratio — confirms
+# alpha is roughly architecture-agnostic (~0.85–0.90) for FA2 across GPU generations.
+OVERHEAD_RTX5090_FLASH2 = OverheadProfile(
+    name="RTX_5090_flash_attention_2",
+    roofline_efficiency=1.0,
+    launch_overhead_s=0.015000,
+    attn_scan_coeff=0.0,
+    fa_block_size=64,
+    attn_scan_exponent=1.0,
+    alloc_coeff=0.0,
+    kv_bandwidth_alpha=0.90281,
+    kv_bandwidth_beta=0.600,
 )
 
 # A100-40GB · SDPA · calibrated on LLaMA-3.2-3B (8 KV heads, 28 layers)

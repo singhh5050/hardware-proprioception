@@ -1,0 +1,8 @@
+context_length,decode_steps,measured_total_ms,measured_stdev_ms,measured_per_token_ms,peak_memory_mb,hardware_key,model_name,attn_impl
+1024,128,2325.62,0.0,18.190,6321.0,RTX_5090,meta-llama/Llama-3.2-3B,flash_attention_2
+2048,128,2366.51,0.0,18.488,6506.0,RTX_5090,meta-llama/Llama-3.2-3B,flash_attention_2
+4096,128,2433.0,0.0,19.007,6874.0,RTX_5090,meta-llama/Llama-3.2-3B,flash_attention_2
+8192,128,2588.7,0.0,20.224,7613.0,RTX_5090,meta-llama/Llama-3.2-3B,flash_attention_2
+16384,128,3018.9,0.0,23.585,9089.0,RTX_5090,meta-llama/Llama-3.2-3B,flash_attention_2
+32768,128,4531.8,0.0,35.405,12041.0,RTX_5090,meta-llama/Llama-3.2-3B,flash_attention_2
+65536,128,8676.8,0.0,67.787,17946.0,RTX_5090,meta-llama/Llama-3.2-3B,flash_attention_2

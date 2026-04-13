@@ -1,0 +1,9 @@
+context_length,decode_steps,measured_total_ms,measured_stdev_ms,measured_per_token_ms,peak_memory_mb,hardware_key,model_name,attn_impl
+1024,128,2529.77,10.71,19.764,6344.9,H200,meta-llama/Llama-3.2-3B,flash_attention_2
+2048,128,2559.47,17.47,19.996,6529.4,H200,meta-llama/Llama-3.2-3B,flash_attention_2
+4096,128,2587.5,3.8,20.215,6898.0,H200,meta-llama/Llama-3.2-3B,flash_attention_2
+8192,128,2648.09,7.63,20.688,7636.6,H200,meta-llama/Llama-3.2-3B,flash_attention_2
+16384,128,2997.48,8.63,23.418,9112.5,H200,meta-llama/Llama-3.2-3B,flash_attention_2
+32768,128,3986.13,4.04,31.142,12065.1,H200,meta-llama/Llama-3.2-3B,flash_attention_2
+65536,128,6716.27,4.63,52.471,17970.3,H200,meta-llama/Llama-3.2-3B,flash_attention_2
+131072,128,15599.56,26.81,121.872,29780.8,H200,meta-llama/Llama-3.2-3B,flash_attention_2
