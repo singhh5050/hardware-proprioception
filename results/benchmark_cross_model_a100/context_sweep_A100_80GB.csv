@@ -1,0 +1,9 @@
+context_length,decode_steps,batch_size,prefill_ms,decode_total_ms,measured_per_step_ms,measured_stdev_per_step_ms,simulated_per_step_ms,ratio_measured_over_simulated,peak_memory_mb,hardware_key,model_config_key,model_name,attn_impl,measured_per_token_ms,measured_stdev_ms,simulated_per_token_ms
+1024,128,1,85.37,3937.03,30.758,0.643,6.459,4.762,14894.8,A100_80GB,Qwen2.5-7B,Qwen/Qwen2.5-7B-Instruct,flash_attention_2,30.758,0.643,6.459
+2048,128,1,154.61,3893.42,30.417,0.022,6.485,4.69,15255.3,A100_80GB,Qwen2.5-7B,Qwen/Qwen2.5-7B-Instruct,flash_attention_2,30.417,0.022,6.485
+4096,128,1,309.81,3919.35,30.62,0.129,6.539,4.683,15973.8,A100_80GB,Qwen2.5-7B,Qwen/Qwen2.5-7B-Instruct,flash_attention_2,30.62,0.129,6.539
+8192,128,1,632.68,3904.92,30.507,0.04,6.646,4.591,17413.8,A100_80GB,Qwen2.5-7B,Qwen/Qwen2.5-7B-Instruct,flash_attention_2,30.507,0.04,6.646
+16384,128,1,1381.65,3898.72,30.459,0.045,6.859,4.44,20293.9,A100_80GB,Qwen2.5-7B,Qwen/Qwen2.5-7B-Instruct,flash_attention_2,30.459,0.045,6.859
+32768,128,1,3272.47,4213.5,32.918,0.11,7.287,4.518,26054.0,A100_80GB,Qwen2.5-7B,Qwen/Qwen2.5-7B-Instruct,flash_attention_2,32.918,0.11,7.287
+65536,128,1,8652.18,4953.9,38.702,0.094,8.141,4.754,37574.3,A100_80GB,Qwen2.5-7B,Qwen/Qwen2.5-7B-Instruct,flash_attention_2,38.702,0.094,8.141
+131072,128,1,26256.19,6465.66,50.513,0.099,9.85,5.128,60614.8,A100_80GB,Qwen2.5-7B,Qwen/Qwen2.5-7B-Instruct,flash_attention_2,50.513,0.099,9.85
