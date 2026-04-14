@@ -43,7 +43,7 @@ _GPU_NAME_TO_HW_KEY = [
     ("a100-sxm4-40", "A100_40GB"),
     ("a100",  "A100_40GB"),
     ("l40",   "L40S"),
-    ("4090",  "RTX_4090"),
+    # ("4090",  "RTX_4090"),  # not in hardware catalog — let it fall through to warning
     ("5090",  "RTX_5090"),
     ("mi350", "MI350X"),
     ("mi325", "MI325X"),
@@ -88,8 +88,11 @@ def detect_best_attn_impl(model_name: str) -> str:
 # ---------------------------------------------------------------------------
 # Prompt construction
 # ---------------------------------------------------------------------------
-def build_prompt(tokenizer, target_len: int):
-    """Build a prompt of exactly target_len tokens by tiling base text."""
+def build_prompt(tokenizer, target_len: int, batch_size: int = 1):
+    """Build a prompt of exactly target_len tokens by tiling base text.
+
+    Returns tensor of shape [batch_size, target_len].
+    """
     base_text = (
         "The quick brown fox jumps over the lazy dog. "
         "A journey of a thousand miles begins with a single step. "
@@ -99,21 +102,25 @@ def build_prompt(tokenizer, target_len: int):
     n_base = len(base_ids)
 
     if target_len <= n_base:
-        return base_ids[:target_len].unsqueeze(0)
+        single = base_ids[:target_len].unsqueeze(0)
+    else:
+        reps = (target_len // n_base) + 1
+        tiled = base_ids.repeat(reps)[:target_len]
+        single = tiled.unsqueeze(0)
 
-    # Tile to reach target length
-    reps = (target_len // n_base) + 1
-    tiled = base_ids.repeat(reps)[:target_len]
-    return tiled.unsqueeze(0)
+    # Tile along batch dimension
+    if batch_size > 1:
+        return single.expand(batch_size, -1).contiguous()
+    return single
 
 
 # ---------------------------------------------------------------------------
 # VRAM estimation
 # ---------------------------------------------------------------------------
-def estimate_vram_gb(model_config, context_len: int) -> float:
+def estimate_vram_gb(model_config, context_len: int, batch_size: int = 1) -> float:
     """Estimate peak VRAM in GB: model weights + KV cache at context_len."""
     param_bytes = model_config.param_bytes
-    kv_bytes = model_config.kv_bytes_per_token * context_len
+    kv_bytes = model_config.kv_bytes_per_token * context_len * batch_size
     return (param_bytes + kv_bytes) / (1024**3)
 
 
@@ -140,19 +147,27 @@ def run_timed_generation(
 ) -> dict:
     """Measure wall-clock latency with prefill and decode timed separately.
 
-    Returns dict with prefill_ms, decode_ms, decode_per_token_ms, stdev, peak_memory_mb.
+    input_ids shape: [batch_size, seq_len].
+    Decode latency is reported per decode step (not per token — i.e., one step
+    generates batch_size tokens simultaneously, and we report the wall-clock
+    time for that step).
+
+    Returns dict with prefill_ms, decode_ms, decode_per_step_ms, stdev,
+    batch_size, peak_memory_mb.
     """
     import torch
 
+    batch_size = input_ids.shape[0]
+
     def _prefill_and_decode(num_steps):
-        """Run prefill + decode loop, returning (prefill_s, decode_s, tokens_generated)."""
+        """Run prefill + decode loop, returning (prefill_s, decode_s, steps)."""
         # Phase 1: Prefill
         torch.cuda.synchronize()
         t_prefill = timeit.default_timer()
         with torch.no_grad():
             outputs = model(input_ids, use_cache=True)
             past_kv = outputs.past_key_values
-            next_token = outputs.logits[:, -1:, :].argmax(dim=-1)
+            next_token = outputs.logits[:, -1:, :].argmax(dim=-1)  # [B, 1]
         torch.cuda.synchronize()
         prefill_s = timeit.default_timer() - t_prefill
 
@@ -163,7 +178,7 @@ def run_timed_generation(
             with torch.no_grad():
                 outputs = model(next_token, past_key_values=past_kv, use_cache=True)
                 past_kv = outputs.past_key_values
-                next_token = outputs.logits[:, -1:, :].argmax(dim=-1)
+                next_token = outputs.logits[:, -1:, :].argmax(dim=-1)  # [B, 1]
         torch.cuda.synchronize()
         decode_s = timeit.default_timer() - t_decode
 
@@ -180,14 +195,16 @@ def run_timed_generation(
     # Timed runs
     prefill_times = []
     decode_times = []
-    actual_tokens = 0
+    actual_steps = 0
     for i in range(repeats):
-        prefill_s, decode_s, actual_tokens = _prefill_and_decode(decode_steps)
+        prefill_s, decode_s, actual_steps = _prefill_and_decode(decode_steps)
         prefill_times.append(prefill_s)
         decode_times.append(decode_s)
-        decode_per_tok = decode_s / actual_tokens * 1000
+        ms_per_step = decode_s / actual_steps * 1000
+        total_toks = actual_steps * batch_size
         print(f"    run {i + 1}/{repeats}: prefill {prefill_s * 1000:.1f} ms, "
-              f"decode {decode_s * 1000:.1f} ms ({decode_per_tok:.2f} ms/tok)")
+              f"decode {decode_s * 1000:.1f} ms "
+              f"({ms_per_step:.2f} ms/step, {total_toks} tokens @ bs={batch_size})")
 
     peak_mb = 0.0
     if torch.cuda.is_available():
@@ -200,10 +217,12 @@ def run_timed_generation(
     return {
         "prefill_ms": mean_prefill * 1000,
         "decode_ms": mean_decode * 1000,
-        "decode_per_token_ms": mean_decode / actual_tokens * 1000,
+        "decode_per_step_ms": mean_decode / actual_steps * 1000,
         "decode_stdev_ms": stdev_decode * 1000,
-        "decode_stdev_per_token_ms": stdev_decode / actual_tokens * 1000,
-        "tokens_generated": actual_tokens,
+        "decode_stdev_per_step_ms": stdev_decode / actual_steps * 1000,
+        "decode_steps": actual_steps,
+        "batch_size": batch_size,
+        "tokens_per_step": batch_size,
         "peak_memory_mb": peak_mb,
     }
 
@@ -216,6 +235,7 @@ def run_simulation(
     model_key: str,
     prompt_len: int,
     decode_steps: int,
+    batch_size: int = 1,
 ) -> dict:
     """Run roofline simulation for full_cache at given context length."""
     from hwprop.eval_pipeline import compute_strategy_latency
@@ -231,6 +251,7 @@ def run_simulation(
         model_config=model_cfg,
         prompt_len=prompt_len,
         decode_steps=decode_steps,
+        batch_size=batch_size,
     )
 
 
@@ -248,8 +269,8 @@ def plot_results(rows: list[dict], hw_key: str, output_dir: str):
         return
 
     ctx_lens = [r["context_length"] for r in rows]
-    measured = [r["decode_per_token_ms"] for r in rows]
-    simulated = [r["simulated_per_token_ms"] for r in rows]
+    measured = [r["measured_per_step_ms"] for r in rows]
+    simulated = [r["simulated_per_step_ms"] for r in rows]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
@@ -258,7 +279,7 @@ def plot_results(rows: list[dict], hw_key: str, output_dir: str):
     ax1.plot(ctx_lens, simulated, "s--", color="#B71C1C", linewidth=2, markersize=6, label="Simulated (roofline)")
     ax1.set_xscale("log", base=2)
     ax1.set_xlabel("Context length (tokens)")
-    ax1.set_ylabel("Latency (ms/token)")
+    ax1.set_ylabel("Latency (ms/step)")
     ax1.set_title(f"Decode latency vs context length ({hw_key})")
     ax1.legend()
     ax1.grid(alpha=0.3)
@@ -334,6 +355,10 @@ def parse_args() -> argparse.Namespace:
         help="Output directory (default: results/benchmark)",
     )
     parser.add_argument(
+        "--batch-size", type=int, default=1,
+        help="Batch size — number of sequences decoded in parallel (default: 1)",
+    )
+    parser.add_argument(
         "--skip-oom", action="store_true",
         help="Skip context lengths that cause OOM instead of aborting",
     )
@@ -369,6 +394,7 @@ def main() -> int:
     print(f"Model size:           {model_cfg.param_bytes / (1024**3):.1f} GB")
     print(f"Context lengths:      {context_lengths}")
     print(f"Decode steps:         {args.decode_steps}")
+    print(f"Batch size:           {args.batch_size}")
 
     # Load model
     attn_impl = detect_best_attn_impl(args.model)
@@ -393,7 +419,7 @@ def main() -> int:
         torch.cuda.empty_cache()
 
         # VRAM check
-        est_gb = estimate_vram_gb(model_cfg, ctx_len + args.decode_steps)
+        est_gb = estimate_vram_gb(model_cfg, ctx_len + args.decode_steps, args.batch_size)
         print(f"  Estimated peak VRAM: {est_gb:.1f} GB (GPU has {gpu_mem_gb:.1f} GB)")
         if est_gb > gpu_mem_gb * 0.95:
             msg = f"  SKIP: estimated VRAM ({est_gb:.1f} GB) exceeds GPU capacity ({gpu_mem_gb:.1f} GB)"
@@ -401,7 +427,7 @@ def main() -> int:
             continue
 
         # Build prompt
-        input_ids = build_prompt(tokenizer, ctx_len).to(model.device)
+        input_ids = build_prompt(tokenizer, ctx_len, args.batch_size).to(model.device)
         actual_len = input_ids.shape[1]
         print(f"  Prompt: {actual_len:,} tokens")
 
@@ -425,63 +451,77 @@ def main() -> int:
                 print("  Use --skip-oom to continue past OOM errors")
                 return 1
 
-        tokens_for_calc = timing["tokens_generated"]
-        decode_per_token_ms = timing["decode_per_token_ms"]
+        steps_for_calc = timing["decode_steps"]
+        decode_per_step_ms = timing["decode_per_step_ms"]
+        batch_size = timing["batch_size"]
 
-        # Simulation (decode-only, apples-to-apples)
+        # Simulation (decode-only, apples-to-apples with matching batch_size)
         sim = run_simulation(
             hardware_key=hw_key,
             model_key=args.model_config,
             prompt_len=actual_len,
-            decode_steps=tokens_for_calc,
+            decode_steps=steps_for_calc,
+            batch_size=batch_size,
         )
-        simulated_per_token_ms = sim["mean_latency_ms"]
+        simulated_per_step_ms = sim["mean_latency_ms"]
         ratio = (
-            decode_per_token_ms / simulated_per_token_ms
-            if simulated_per_token_ms > 0 else float("nan")
+            decode_per_step_ms / simulated_per_step_ms
+            if simulated_per_step_ms > 0 else float("nan")
         )
 
         print(f"  Prefill:    {timing['prefill_ms']:.1f} ms")
-        print(f"  Decode:     {decode_per_token_ms:.3f} ms/token  "
-              f"(±{timing['decode_stdev_per_token_ms']:.3f} ms/token)")
-        print(f"  Simulated:  {simulated_per_token_ms:.3f} ms/token")
+        print(f"  Decode:     {decode_per_step_ms:.3f} ms/step  "
+              f"(±{timing['decode_stdev_per_step_ms']:.3f} ms/step)"
+              f"  [batch_size={batch_size}]")
+        print(f"  Simulated:  {simulated_per_step_ms:.3f} ms/step  (roofline, bs={batch_size})")
         print(f"  Ratio:      {ratio:.2f}x")
         print(f"  Peak VRAM:  {timing['peak_memory_mb']:.0f} MB")
 
-        rows.append({
+        row_data = {
             "context_length": actual_len,
-            "decode_steps": tokens_for_calc,
+            "decode_steps": steps_for_calc,
+            "batch_size": batch_size,
             "prefill_ms": round(timing["prefill_ms"], 2),
             "decode_total_ms": round(timing["decode_ms"], 2),
-            "decode_per_token_ms": round(decode_per_token_ms, 3),
-            "decode_stdev_per_token_ms": round(timing["decode_stdev_per_token_ms"], 3),
-            "simulated_per_token_ms": round(simulated_per_token_ms, 3),
+            "measured_per_step_ms": round(decode_per_step_ms, 3),
+            "measured_stdev_per_step_ms": round(timing["decode_stdev_per_step_ms"], 3),
+            "simulated_per_step_ms": round(simulated_per_step_ms, 3),
             "ratio_measured_over_simulated": round(ratio, 3),
             "peak_memory_mb": round(timing["peak_memory_mb"], 1),
             "hardware_key": hw_key,
             "model_config_key": args.model_config,
             "model_name": args.model,
             "attn_impl": attn_impl,
-        })
+        }
+        # Backward-compat aliases with correct per-TOKEN semantics.
+        # At batch_size=1 these equal the per-step values.
+        # At batch_size>1, one step produces batch_size tokens, so per-token
+        # latency = per-step latency / batch_size.
+        row_data["measured_per_token_ms"] = round(decode_per_step_ms / batch_size, 3)
+        row_data["measured_stdev_ms"] = round(timing["decode_stdev_per_step_ms"] / batch_size, 3)
+        row_data["simulated_per_token_ms"] = round(simulated_per_step_ms / batch_size, 3)
+        rows.append(row_data)
 
     if not rows:
         print("\nNo results collected.")
         return 1
 
     # Summary table
-    print(f"\n{'=' * 90}")
-    print(f"{'Context':>10} {'Prefill ms':>11} {'Decode ms/tok':>14} {'Sim ms/tok':>12} {'Ratio':>8} {'Peak MB':>9}")
-    print("-" * 90)
+    bs_label = f" (bs={rows[0]['batch_size']})" if rows else ""
+    print(f"\n{'=' * 100}")
+    print(f"{'Context':>10} {'Batch':>6} {'Prefill ms':>11} {'ms/step':>10} {'Sim ms/step':>12} {'Ratio':>8} {'Peak MB':>9}")
+    print("-" * 100)
     for row in rows:
         print(
             f"{row['context_length']:>10,} "
+            f"{row['batch_size']:>6} "
             f"{row['prefill_ms']:>11.1f} "
-            f"{row['decode_per_token_ms']:>14.3f} "
-            f"{row['simulated_per_token_ms']:>12.3f} "
+            f"{row['measured_per_step_ms']:>10.3f} "
+            f"{row['simulated_per_step_ms']:>12.3f} "
             f"{row['ratio_measured_over_simulated']:>8.2f}x "
             f"{row['peak_memory_mb']:>9.0f}"
         )
-    print("=" * 90)
+    print("=" * 100)
 
     # Save CSV
     csv_path = os.path.join(args.output_dir, f"context_sweep_{hw_key}.csv")
