@@ -441,7 +441,7 @@ def get_hardware_specs() -> dict[str, HardwareSpec]:
         fp16_flops=149.7 * TFLOPS,    # with sparsity; ~75 TFLOPS dense
         int8_flops=299.3 * TFLOPS,
         fp32_flops=37.4 * TFLOPS,
-        sram_capacity=10 * (1 << 20),  # ~10.5 MB (84 SMs x 128 KB)
+        sram_capacity=6 * (1 << 20),   # 6 MB L2 cache (confirmed: TopCPU, CpuTronic)
         interconnect_bandwidth=0,       # no NVLink
         disk_capacity=2 * TB,
         disk_bandwidth=5 * GB,
@@ -699,7 +699,7 @@ def get_model_configs() -> dict[str, ModelConfig]:
         num_layers=36,
         d_model=2048,
         num_heads=16,
-        num_kv_heads=8,        # GQA
+        num_kv_heads=2,        # GQA 8:1 (verified from config.json)
         d_ff=11008,
         vocab_size=151936,
     )
@@ -830,14 +830,14 @@ def get_model_configs() -> dict[str, ModelConfig]:
         num_layers=24,
         d_model=2048,
         num_heads=32,
-        num_kv_heads=8,        # GQA
+        num_kv_heads=32,       # Full MHA — NOT GQA (verified from config.json)
         d_ff=8192,
         vocab_size=49152,
     )
 
     models["Gemma-3-1B"] = ModelConfig(
         name="Gemma-3-1B",
-        num_layers=18,
+        num_layers=26,         # 26 layers (verified from config.json, was wrong at 18)
         d_model=1152,
         num_heads=4,
         num_kv_heads=1,        # MQA
@@ -848,12 +848,13 @@ def get_model_configs() -> dict[str, ModelConfig]:
 
     models["Falcon3-7B"] = ModelConfig(
         name="Falcon3-7B",
-        num_layers=32,
+        num_layers=28,         # 28 layers (verified from config.json, was wrong at 32)
         d_model=3072,
-        num_heads=24,
-        num_kv_heads=8,        # GQA
-        d_ff=12288,
+        num_heads=12,          # 12 heads (was wrong at 24)
+        num_kv_heads=4,        # 4 KV heads (verified, was wrong at 8)
+        d_ff=23040,            # (verified from config.json, was wrong at 12288)
         vocab_size=131072,
+        head_dim=256,          # 256 (verified, was defaulting to 128)
     )
 
     return models
