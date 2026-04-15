@@ -237,22 +237,20 @@ def run_simulation(
     decode_steps: int,
     batch_size: int = 1,
 ) -> dict:
-    """Run roofline simulation for full_cache at given context length."""
-    from hwprop.eval_pipeline import compute_strategy_latency
-    from hwprop.specs import get_hardware_specs, get_model_configs
+    """Run simulator (roofline + overhead correction) for full_cache at given context length."""
+    from hwprop.simulator import simulate_latency
 
-    hw = get_hardware_specs()[hardware_key]
-    model_cfg = get_model_configs()[model_key]
-
-    return compute_strategy_latency(
-        strategy_name="full_cache",
-        budget_tokens=None,
-        hardware=hw,
-        model_config=model_cfg,
+    result = simulate_latency(
+        hardware=hardware_key,
+        model=model_key,
+        strategy="full_cache",
         prompt_len=prompt_len,
         decode_steps=decode_steps,
         batch_size=batch_size,
     )
+    # mean_per_token_ms = per-step ms / batch_size; recover per-step for the CSV
+    mean_per_step_ms = result.mean_per_token_ms * batch_size
+    return {"mean_latency_ms": mean_per_step_ms}
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +471,7 @@ def main() -> int:
         print(f"  Decode:     {decode_per_step_ms:.3f} ms/step  "
               f"(±{timing['decode_stdev_per_step_ms']:.3f} ms/step)"
               f"  [batch_size={batch_size}]")
-        print(f"  Simulated:  {simulated_per_step_ms:.3f} ms/step  (roofline, bs={batch_size})")
+        print(f"  Simulated:  {simulated_per_step_ms:.3f} ms/step  (overhead-corrected, bs={batch_size})")
         print(f"  Ratio:      {ratio:.2f}x")
         print(f"  Peak VRAM:  {timing['peak_memory_mb']:.0f} MB")
 

@@ -36,7 +36,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from hwprop.cost_model import CostModel, KVCacheState, StepCost
-from hwprop.overhead import OverheadProfile, OVERHEAD_H100_FLASH2, OVERHEAD_A100_SDPA, OVERHEAD_A100_SDPA_64, OVERHEAD_GH200_SDPA, OVERHEAD_GH200_SDPA_64
+from hwprop.overhead import (
+    OverheadProfile,
+    OVERHEAD_H100_FLASH2,
+    OVERHEAD_H200_FLASH2,
+    OVERHEAD_RTX5090_FLASH2,
+    OVERHEAD_A100_SDPA,
+    OVERHEAD_A100_SDPA_64,
+    OVERHEAD_GH200_SDPA,
+    OVERHEAD_GH200_SDPA_64,
+)
 from hwprop.specs import HardwareSpec, ModelConfig, get_hardware_specs, get_model_configs
 from hwprop.strategy import KVCacheStrategy, EvictionEngine, STRATEGY_REGISTRY, get_strategy
 
@@ -382,6 +391,10 @@ def simulate_latency(
         prof = overhead
     elif isinstance(hardware, str) and hardware == "H100_SXM":
         prof = OVERHEAD_H100_FLASH2
+    elif isinstance(hardware, str) and hardware == "H200":
+        prof = OVERHEAD_H200_FLASH2
+    elif isinstance(hardware, str) and hardware == "RTX_5090":
+        prof = OVERHEAD_RTX5090_FLASH2
     elif isinstance(hardware, str) and hardware == "A100_40GB":
         prof = OVERHEAD_A100_SDPA_64 if decode_steps <= 64 else OVERHEAD_A100_SDPA
     elif isinstance(hardware, str) and hardware == "GH200":
