@@ -1,0 +1,19 @@
+gpu_name,hardware_key,model_name,context_length,batch_size,strategy,mean_ms_per_step,std_ms_per_step,mean_ms_per_token,throughput_tok_per_sec,prefill_ms,total_decode_ms,num_decode_steps,num_warmup_runs,total_generate_ms,peak_memory_mb,param_bytes,kv_bytes_per_token,num_layers,num_kv_heads,head_dim,max_context,attention_impl_actual
+NVIDIA L40S,L40S,google/gemma-3-1b-it,512,1,full_cache,45.965,0.45,45.965,21.8,49.43,23534.03,512,1,23583.46,2185.4,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,1024,1,full_cache,46.327,0.864,46.327,21.6,50.44,23719.41,512,1,23769.85,2455.6,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,2048,1,full_cache,46.308,0.455,46.308,21.6,53.41,23709.92,512,1,23763.33,2995.8,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,4096,1,full_cache,46.23,0.462,46.23,21.6,79.94,23669.73,512,1,23749.67,4081.3,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,8192,1,full_cache,46.895,0.262,46.895,21.3,153.93,24010.33,512,1,24164.26,6237.4,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,16384,1,full_cache,46.136,0.185,46.136,21.7,362.48,23621.46,512,1,23983.94,10559.4,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,32768,1,full_cache,46.195,0.389,46.195,21.6,841.17,23652.01,512,1,24493.18,19203.5,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,4096,1,full_cache,46.798,0.669,46.798,21.4,79.74,23960.35,512,1,24040.09,4081.3,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,4096,1,window_512,48.56,0.633,48.56,20.6,82.1,24862.79,512,1,24944.89,4081.3,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,4096,1,snapkv_512,48.822,0.861,48.822,20.5,82.51,24996.88,512,1,25079.39,4081.3,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,8192,1,full_cache,46.848,0.692,46.848,21.3,154.42,23986.36,512,1,24140.79,6237.4,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,8192,1,window_512,47.874,0.172,47.874,20.9,155.49,24511.68,512,1,24667.17,6237.4,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,8192,1,snapkv_512,48.447,0.401,48.447,20.6,155.44,24804.94,512,1,24960.38,6237.4,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,16384,1,full_cache,47.63,0.835,47.63,21.0,361.93,24386.7,512,1,24748.63,10559.4,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,16384,1,window_512,48.795,1.373,48.795,20.5,363.94,24983.22,512,1,25347.17,10559.4,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,16384,1,snapkv_512,48.003,0.106,48.003,20.8,363.59,24577.79,512,1,24941.38,10559.4,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,8192,1,full_cache,46.664,0.289,46.664,21.4,154.33,23892.05,512,1,24046.38,6237.4,1999771904,26624,26,1,256,32768,flash_attention_2
+NVIDIA L40S,L40S,google/gemma-3-1b-it,8192,4,full_cache,45.002,0.653,11.25,88.9,803.3,23041.01,512,1,23844.32,19203.5,1999771904,26624,26,1,256,32768,flash_attention_2

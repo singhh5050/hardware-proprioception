@@ -1,0 +1,16 @@
+gpu_name,hardware_key,model_name,context_length,batch_size,strategy,mean_ms_per_step,std_ms_per_step,mean_ms_per_token,throughput_tok_per_sec,prefill_ms,total_decode_ms,num_decode_steps,num_warmup_runs,total_generate_ms,peak_memory_mb,param_bytes,kv_bytes_per_token,num_layers,num_kv_heads,head_dim,max_context,attention_impl_actual
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,512,1,full_cache,24.95,0.294,24.95,40.1,27.12,12774.31,512,1,12801.42,3468.5,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,1024,1,full_cache,25.746,0.027,25.746,38.8,29.64,13181.92,512,1,13211.55,3566.4,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,2048,1,full_cache,25.364,0.729,25.364,39.4,48.33,12986.12,512,1,13034.45,3856.5,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,full_cache,25.348,0.63,25.348,39.5,102.73,12978.15,512,1,13080.88,4440.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,full_cache,26.304,0.204,26.304,38.0,240.45,13467.7,512,1,13708.15,5608.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,full_cache,25.233,0.148,25.233,39.6,102.72,12919.37,512,1,13022.08,4440.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,window_512,26.693,0.019,26.693,37.5,103.49,13666.67,512,1,13770.16,4440.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,snapkv_512,26.852,0.03,26.852,37.2,102.82,13748.32,512,1,13851.14,4440.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,expected_attn_512,27.236,0.183,27.236,36.7,103.39,13944.78,512,1,14048.17,4440.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,full_cache,26.417,0.343,26.417,37.9,239.78,13525.54,512,1,13765.32,5608.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,window_512,26.99,0.257,26.99,37.1,240.52,13818.85,512,1,14059.37,5608.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,snapkv_512,26.958,0.267,26.958,37.1,240.16,13802.34,512,1,14042.5,5608.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,expected_attn_512,27.545,1.003,27.545,36.3,239.61,14103.28,512,1,14342.89,5608.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,full_cache,26.037,0.249,26.037,38.4,239.46,13330.69,512,1,13570.15,5608.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA L40S,L40S,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,4,full_cache,38.036,0.004,9.509,105.2,1089.36,19474.37,512,1,20563.73,12617.4,3422752768,196608,24,32,64,8192,flash_attention_2
