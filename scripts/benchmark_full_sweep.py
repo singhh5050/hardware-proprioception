@@ -377,8 +377,16 @@ def main() -> int:
     print(f"\nLoading config for {args.model}...")
     config = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
 
-    num_layers = config.num_hidden_layers
+    # Handle different config attribute names across model families
+    # ChatGLM uses num_layers instead of num_hidden_layers
+    num_layers = getattr(config, "num_hidden_layers",
+                 getattr(config, "num_layers", None))
+    if num_layers is None:
+        print(f"ERROR: Cannot find layer count in config for {args.model}")
+        print(f"  Config attributes: {[k for k in config.to_dict().keys()]}")
+        return 1
     num_heads = config.num_attention_heads
+    # ChatGLM uses multi_query_group_num instead of num_key_value_heads
     num_kv_heads = getattr(config, "num_key_value_heads",
                    getattr(config, "multi_query_group_num", num_heads))
     hidden_size = config.hidden_size
