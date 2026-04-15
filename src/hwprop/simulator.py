@@ -43,7 +43,7 @@ from hwprop.overhead import (
     OVERHEAD_GH200_SDPA,
     OVERHEAD_GH200_SDPA_64,
 )
-from hwprop.v3_model import ALPHA, BETA, GAMMA, KNOWN_LAUNCH_OVERHEADS as V3_LAUNCH
+from hwprop.v3_model import ALPHA, BETA, GAMMA, KNOWN_LAUNCH_OVERHEADS as V3_LAUNCH, REF_LAYERS as V3_REF_LAYERS
 from hwprop.specs import HardwareSpec, ModelConfig, get_hardware_specs, get_model_configs
 from hwprop.strategy import KVCacheStrategy, EvictionEngine, STRATEGY_REGISTRY, get_strategy
 
@@ -102,6 +102,7 @@ class SimResult:
 
     prompt_len: int
     decode_steps: int
+    batch_size: int
 
     prefill_time_s: float
     total_decode_time_s: float
@@ -111,9 +112,10 @@ class SimResult:
 
     @property
     def mean_per_token_ms(self) -> float:
+        """Mean latency per output token, accounting for batch throughput."""
         if not self.step_costs:
             return 0.0
-        return (self.total_decode_time_s / len(self.step_costs)) * 1000.0
+        return (self.total_decode_time_s / len(self.step_costs)) * 1000.0 / self.batch_size
 
     @property
     def total_time_s(self) -> float:
@@ -313,6 +315,7 @@ class LLMSimulator:
             overhead_name=self.overhead.name,
             prompt_len=prompt_len,
             decode_steps=decode_steps,
+            batch_size=self.batch_size,
             prefill_time_s=prefill.time_s,
             total_decode_time_s=total_decode_s,
             step_costs=step_costs,
@@ -398,8 +401,10 @@ def simulate_latency(
     else:
         # FA2 hardware (or unknown): use V3 universal constants.
         # alpha is adjusted per-model via num_kv_heads^gamma.
+        # t_launch scales with num_layers (kernel launches per step ∝ depth);
+        # KNOWN_LAUNCH_OVERHEADS were calibrated on 28-layer models.
         alpha_adj = ALPHA * (mdl.num_kv_heads ** GAMMA)
-        t_launch = V3_LAUNCH.get(hw.name, 0.020)
+        t_launch = V3_LAUNCH.get(hw.name, 0.020) * (mdl.num_layers / V3_REF_LAYERS)
         prof = OverheadProfile(
             name=f"{hw.name}_v3_fa2",
             roofline_efficiency=1.0,

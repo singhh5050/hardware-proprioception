@@ -49,7 +49,11 @@ ALPHA = 0.0181
 BETA = 0.619
 GAMMA = 1.776
 
-# Known per-GPU launch overheads (seconds)
+# Known per-GPU launch overheads (seconds), calibrated at REF_LAYERS=28.
+# Both calibration models (LLaMA-3.2-3B, Qwen2.5-7B) have 28 layers.
+# For other models scale: t_launch = base * (model.num_layers / REF_LAYERS)
+REF_LAYERS: int = 28
+
 KNOWN_LAUNCH_OVERHEADS: dict[str, float] = {
     "H100_SXM": 0.01547,   # 15.5 ms — from H100 + LLaMA-3.2-3B fit
     "A100_80GB": 0.02430,  # 24.3 ms — from A100-80GB + Qwen2.5-7B 1K-context
