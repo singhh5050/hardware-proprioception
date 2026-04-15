@@ -38,14 +38,12 @@ from dataclasses import dataclass, field
 from hwprop.cost_model import CostModel, KVCacheState, StepCost
 from hwprop.overhead import (
     OverheadProfile,
-    OVERHEAD_H100_FLASH2,
-    OVERHEAD_H200_FLASH2,
-    OVERHEAD_RTX5090_FLASH2,
     OVERHEAD_A100_SDPA,
     OVERHEAD_A100_SDPA_64,
     OVERHEAD_GH200_SDPA,
     OVERHEAD_GH200_SDPA_64,
 )
+from hwprop.v3_model import ALPHA, BETA, GAMMA, KNOWN_LAUNCH_OVERHEADS as V3_LAUNCH
 from hwprop.specs import HardwareSpec, ModelConfig, get_hardware_specs, get_model_configs
 from hwprop.strategy import KVCacheStrategy, EvictionEngine, STRATEGY_REGISTRY, get_strategy
 
@@ -199,7 +197,11 @@ class LLMSimulator:
         raw: StepCost = self._cost_model.step_cost(kv_state, self.batch_size)
         active = kv_state.active_tokens
         seq_len = kv_state.seq_len
-        interval = self.strategy.decision_interval
+        # Only pass real decision_interval for strategies that rescore during decode.
+        # Prefill-only strategies (snapkv, expected_attn) pass a huge value so that
+        # t_scoring = eviction_score_coeff * (seq_len / interval) ≈ 0.
+        interval = (self.strategy.decision_interval if self.strategy.scores_during_decode
+                    else 10 ** 9)
 
         import math
         tiles = (active / max(self.overhead.fa_block_size, 1)) ** self.overhead.attn_scan_exponent
@@ -389,18 +391,23 @@ def simulate_latency(
     prof: OverheadProfile
     if overhead is not None:
         prof = overhead
-    elif isinstance(hardware, str) and hardware == "H100_SXM":
-        prof = OVERHEAD_H100_FLASH2
-    elif isinstance(hardware, str) and hardware == "H200":
-        prof = OVERHEAD_H200_FLASH2
-    elif isinstance(hardware, str) and hardware == "RTX_5090":
-        prof = OVERHEAD_RTX5090_FLASH2
     elif isinstance(hardware, str) and hardware == "A100_40GB":
         prof = OVERHEAD_A100_SDPA_64 if decode_steps <= 64 else OVERHEAD_A100_SDPA
     elif isinstance(hardware, str) and hardware == "GH200":
         prof = OVERHEAD_GH200_SDPA_64 if decode_steps <= 64 else OVERHEAD_GH200_SDPA
     else:
-        prof = OverheadProfile.for_hardware(hw)
+        # FA2 hardware (or unknown): use V3 universal constants.
+        # alpha is adjusted per-model via num_kv_heads^gamma.
+        alpha_adj = ALPHA * (mdl.num_kv_heads ** GAMMA)
+        t_launch = V3_LAUNCH.get(hw.name, 0.020)
+        prof = OverheadProfile(
+            name=f"{hw.name}_v3_fa2",
+            roofline_efficiency=1.0,
+            launch_overhead_s=t_launch,
+            attn_scan_coeff=0.0,
+            kv_bandwidth_alpha=alpha_adj,
+            kv_bandwidth_beta=BETA,
+        )
 
     sim = LLMSimulator(hw, mdl, overhead=prof, strategy=strat, batch_size=batch_size)
     return sim.simulate_sequence(prompt_len=prompt_len, decode_steps=decode_steps)

@@ -94,6 +94,16 @@ class KVCacheStrategy:
     # Decision frequency
     decision_interval: int = 64
 
+    @property
+    def scores_during_decode(self) -> bool:
+        """True for strategies that rescore KV tokens every decision_interval steps.
+
+        window and heavy_hitter (H2O) rescore the full KV cache at every decision
+        boundary during decode — their overhead scales with seq_len / interval.
+        snapkv and expected_attn score once at prefill and never again during decode.
+        """
+        return self.eviction_policy in ("window", "heavy_hitter")
+
     def __post_init__(self) -> None:
         total_tier = self.hbm_frac + self.cpu_frac + self.disk_frac
         if total_tier > 1.0 + 1e-6:

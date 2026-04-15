@@ -400,10 +400,11 @@ class TestSimulateLatency:
         with pytest.raises(KeyError, match="Unknown model"):
             simulate_latency("H100_SXM", "NonExistentModel")
 
-    def test_h100_uses_flash2_profile(self):
+    def test_h100_uses_v3_fa2_profile(self):
+        # FA2 hardware now always routes through V3 universal constants
         result = simulate_latency("H100_SXM", "LLaMA-3.2-3B",
                                   prompt_len=128, decode_steps=16)
-        assert result.overhead_name == OVERHEAD_H100_FLASH2.name
+        assert result.overhead_name == "H100_SXM_v3_fa2"
 
     def test_a100_uses_sdpa_profile(self):
         result_short = simulate_latency("A100_40GB", "Qwen2.5-7B",
