@@ -1,0 +1,2 @@
+context_length,decode_steps,batch_size,prefill_ms,decode_total_ms,measured_per_step_ms,measured_stdev_per_step_ms,simulated_per_step_ms,ratio_measured_over_simulated,peak_memory_mb,hardware_key,model_config_key,model_name,attn_impl,measured_per_token_ms,measured_stdev_ms,simulated_per_token_ms
+8192,128,1,628.76,3920.1,30.626,0.098,6.646,4.608,17413.8,A100_80GB,Qwen2.5-7B,Qwen/Qwen2.5-7B-Instruct,flash_attention_2,30.626,0.098,6.646
