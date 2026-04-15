@@ -1,0 +1,16 @@
+gpu_name,hardware_key,model_name,context_length,batch_size,strategy,mean_ms_per_step,std_ms_per_step,mean_ms_per_token,throughput_tok_per_sec,prefill_ms,total_decode_ms,num_decode_steps,num_warmup_runs,total_generate_ms,peak_memory_mb,param_bytes,kv_bytes_per_token,num_layers,num_kv_heads,head_dim,max_context,attention_impl_actual
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,512,1,full_cache,21.059,0.214,21.059,47.5,33.55,10782.23,512,1,10815.79,3468.5,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,1024,1,full_cache,20.999,0.086,20.999,47.6,57.71,10751.4,512,1,10809.11,3566.4,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,2048,1,full_cache,20.971,0.09,20.971,47.7,111.35,10737.04,512,1,10848.39,3856.5,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,full_cache,22.166,0.218,22.166,45.1,222.68,11349.1,512,1,11571.78,4440.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,full_cache,25.714,0.182,25.714,38.9,464.21,13165.47,512,1,13629.68,5608.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,full_cache,22.26,0.13,22.26,44.9,223.0,11397.15,512,1,11620.15,4440.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,window_512,23.473,0.133,23.473,42.6,223.38,12018.08,512,1,12241.46,4440.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,snapkv_512,22.227,0.165,22.227,45.0,223.97,11379.99,512,1,11603.95,4440.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,expected_attn_512,22.758,0.48,22.758,43.9,223.64,11651.94,512,1,11875.58,4440.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,full_cache,24.7,0.108,24.7,40.5,461.91,12646.31,512,1,13108.22,5608.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,window_512,22.827,0.141,22.827,43.8,461.67,11687.58,512,1,12149.25,5608.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,snapkv_512,22.897,0.034,22.897,43.7,461.8,11723.45,512,1,12185.25,5608.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,expected_attn_512,23.406,0.222,23.406,42.7,464.02,11983.83,512,1,12447.85,5608.7,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,full_cache,24.876,0.037,24.876,40.2,461.99,12736.57,512,1,13198.56,5608.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA A40,A40,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,4,full_cache,49.179,0.006,12.295,81.3,1778.76,25179.45,512,1,26958.21,12617.4,3422752768,196608,24,32,64,8192,flash_attention_2
