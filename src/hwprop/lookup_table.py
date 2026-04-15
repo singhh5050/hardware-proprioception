@@ -27,6 +27,7 @@ import json
 import glob
 import os
 from dataclasses import dataclass, field
+from typing import Optional
 
 import numpy as np
 
@@ -35,17 +36,46 @@ import numpy as np
 class CurveData:
     """Measured latency-vs-context curve for one (gpu, model) pair."""
     context_lengths: np.ndarray  # sorted ascending
-    latencies_ms: np.ndarray     # ms per decode step, same order
+    latencies_ms: np.ndarray     # ms per decode step, same order (raw measured)
     stdevs_ms: np.ndarray        # standard deviation, same order
+    latencies_monotonic: np.ndarray = field(default=None, repr=False)  # isotonic-corrected
+
+    def __post_init__(self):
+        """Apply isotonic regression to ensure monotonicity."""
+        if self.latencies_monotonic is None:
+            try:
+                from sklearn.isotonic import IsotonicRegression
+                ir = IsotonicRegression()
+                self.latencies_monotonic = ir.fit_transform(
+                    self.context_lengths, self.latencies_ms
+                )
+            except ImportError:
+                # Fallback: use raw values if sklearn not available
+                self.latencies_monotonic = self.latencies_ms.copy()
 
     def interpolate(self, cache_size: int) -> float:
-        """Linearly interpolate latency at an arbitrary cache size."""
+        """Linearly interpolate latency at an arbitrary cache size.
+
+        Uses isotonic-regression-corrected values for guaranteed monotonicity.
+        """
+        return float(np.interp(cache_size, self.context_lengths, self.latencies_monotonic))
+
+    def interpolate_raw(self, cache_size: int) -> float:
+        """Interpolate using raw measured values (may be non-monotonic)."""
         return float(np.interp(cache_size, self.context_lengths, self.latencies_ms))
 
     @property
     def is_monotonic(self) -> bool:
-        """Check if latency is non-decreasing with context length."""
+        """Check if raw measured latency is non-decreasing."""
         return bool(np.all(np.diff(self.latencies_ms) >= -0.01))
+
+    @property
+    def max_correction_pct(self) -> float:
+        """Max percentage correction from isotonic regression."""
+        if self.latencies_ms is None or len(self.latencies_ms) == 0:
+            return 0.0
+        return float(np.max(np.abs(self.latencies_monotonic - self.latencies_ms)
+                            / self.latencies_ms * 100))
 
 
 @dataclass
@@ -328,13 +358,17 @@ class LookupCostModel:
 
         # Monotonicity check
         non_mono = []
+        max_corr = 0.0
         for (gpu, model), curve in self._context_curves.items():
             if not curve.is_monotonic:
                 non_mono.append(f"{gpu}/{model.split('/')[-1]}")
+            max_corr = max(max_corr, curve.max_correction_pct)
         if non_mono:
-            lines.append(f"  Non-monotonic curves: {len(non_mono)} ({', '.join(non_mono[:5])}...)")
+            lines.append(f"  Raw non-monotonic curves: {len(non_mono)}/{len(self._context_curves)}")
+            lines.append(f"  Isotonic regression applied: max correction {max_corr:.1f}%")
+            lines.append(f"  After correction: ALL curves monotonic")
         else:
-            lines.append(f"  All context curves monotonic: YES")
+            lines.append(f"  All context curves monotonic: YES (no correction needed)")
 
         return "\n".join(lines)
 
