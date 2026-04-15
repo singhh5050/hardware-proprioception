@@ -1,0 +1,17 @@
+gpu_name,hardware_key,model_name,context_length,batch_size,strategy,mean_ms_per_step,std_ms_per_step,mean_ms_per_token,throughput_tok_per_sec,prefill_ms,total_decode_ms,num_decode_steps,num_warmup_runs,total_generate_ms,peak_memory_mb,param_bytes,kv_bytes_per_token,num_layers,num_kv_heads,head_dim,max_context,attention_impl_actual
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,512,1,full_cache,16.452,0.468,16.452,60.8,18.73,8423.26,512,1,8441.99,3492.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,1024,1,full_cache,16.319,0.041,16.319,61.3,19.23,8355.49,512,1,8374.72,3590.3,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,2048,1,full_cache,16.486,0.384,16.486,60.7,25.34,8440.59,512,1,8465.92,3880.4,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,full_cache,16.428,0.111,16.428,60.9,47.27,8411.32,512,1,8458.59,4464.4,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,full_cache,17.337,0.038,17.337,57.7,100.25,8876.34,512,1,8976.58,5632.5,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,full_cache,16.441,0.127,16.441,60.8,47.2,8417.61,512,1,8464.81,4464.4,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,window_512,18.354,0.239,18.354,54.5,47.93,9397.0,512,1,9444.94,4464.5,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,snapkv_512,18.337,0.011,18.337,54.5,47.78,9388.66,512,1,9436.43,4464.5,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,4096,1,expected_attn_512,18.502,0.024,18.502,54.0,47.84,9473.25,512,1,9521.1,4464.5,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,full_cache,17.289,0.013,17.289,57.8,100.44,8852.1,512,1,8952.54,5632.5,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,window_512,18.338,0.073,18.338,54.5,100.82,9389.28,512,1,9490.1,5632.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,snapkv_512,18.501,0.111,18.501,54.0,100.77,9472.76,512,1,9573.53,5632.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,expected_attn_512,18.858,0.265,18.858,53.0,101.08,9655.21,512,1,9756.29,5632.6,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,1,full_cache,17.308,0.008,17.308,57.8,100.37,8861.71,512,1,8962.07,5632.5,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,4,full_cache,18.039,0.024,4.51,221.7,371.86,9236.16,512,1,9608.02,12641.3,3422752768,196608,24,32,64,8192,flash_attention_2
+NVIDIA H200,H200,HuggingFaceTB/SmolLM2-1.7B-Instruct,8192,16,full_cache,60.418,0.006,3.776,264.8,1515.49,30934.04,512,1,32449.53,40676.6,3422752768,196608,24,32,64,8192,flash_attention_2
