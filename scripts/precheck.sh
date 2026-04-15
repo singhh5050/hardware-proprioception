@@ -44,7 +44,7 @@ MODELS=(
     "meta-llama/Llama-3.2-3B"
     "Qwen/Qwen2.5-3B-Instruct"
     "Qwen/Qwen2.5-7B-Instruct"
-    "Qwen/Qwen2.5-14B-Instruct"
+    # "Qwen/Qwen2.5-14B-Instruct"  # DISABLED
     "tiiuae/Falcon3-7B-Base"
     # "THUDM/glm-4-9b"  # DISABLED: incompatible with transformers 5.x
     "microsoft/phi-4"
