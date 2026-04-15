@@ -42,17 +42,17 @@ from hwprop.simulator import simulate_latency
 # HuggingFace model name → hwprop model config key (or None = build from JSONL)
 # ---------------------------------------------------------------------------
 HF_TO_HWPROP: dict[str, str] = {
-    "meta-llama/Llama-3.2-3B":          "LLaMA-3.2-3B",
-    "meta-llama/Llama-3.2-1B":          "LLaMA-3.2-1B",
-    "meta-llama/Llama-3.1-8B":          "LLaMA-3.1-8B",
-    "Qwen/Qwen2.5-7B-Instruct":         "Qwen2.5-7B",
-    "Qwen/Qwen2.5-14B-Instruct":        "Qwen2.5-14B",
-    "Qwen/Qwen2.5-3B-Instruct":         "Qwen2.5-3B",
-    "Qwen/Qwen2.5-1.5B-Instruct":       "Qwen2.5-1.5B",
-    "microsoft/phi-4":                  "Phi-4-14B",
-    "google/gemma-3-1b-it":             "Gemma-3-1B",
-    "HuggingFaceTB/SmolLM2-1.7B-Instruct": "SmolLM2-1.7B",
-    "tiiuae/Falcon3-7B-Base":           "Falcon3-7B",
+    "meta-llama/Llama-3.2-3B":              "LLaMA-3.2-3B",
+    "meta-llama/Llama-3.2-1B":              "LLaMA-3.2-1B",
+    "meta-llama/Llama-3.1-8B":              "LLaMA-3.1-8B",
+    "Qwen/Qwen2.5-7B-Instruct":             "Qwen2.5-7B",
+    "Qwen/Qwen2.5-14B-Instruct":            "Qwen2.5-14B",
+    "Qwen/Qwen2.5-3B-Instruct":             "Qwen2.5-3B",
+    "Qwen/Qwen2.5-1.5B-Instruct":           "Qwen2.5-1.5B",
+    "microsoft/phi-4":                      "Phi-4-14B",
+    "google/gemma-3-1b-it":                 "Gemma-3-1B",
+    "HuggingFaceTB/SmolLM2-1.7B-Instruct":  "SmolLM2-1.7B",
+    "tiiuae/Falcon3-7B-Base":               "Falcon3-7B",
 }
 
 

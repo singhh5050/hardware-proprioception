@@ -650,6 +650,16 @@ def get_model_configs() -> dict[str, ModelConfig]:
         vocab_size=128256,
     )
 
+    models["LLaMA-3.2-1B"] = ModelConfig(
+        name="LLaMA-3.2-1B",
+        num_layers=16,
+        d_model=2048,
+        num_heads=32,
+        num_kv_heads=8,        # GQA
+        d_ff=8192,
+        vocab_size=128256,
+    )
+
     models["LLaMA-3.2-3B"] = ModelConfig(
         name="LLaMA-3.2-3B",
         num_layers=28,
@@ -673,6 +683,26 @@ def get_model_configs() -> dict[str, ModelConfig]:
     # =========================================================================
     # Qwen 2.5  (dense, strong baselines)
     # =========================================================================
+
+    models["Qwen2.5-1.5B"] = ModelConfig(
+        name="Qwen2.5-1.5B",
+        num_layers=28,
+        d_model=1536,
+        num_heads=12,
+        num_kv_heads=2,        # GQA
+        d_ff=8960,
+        vocab_size=151936,
+    )
+
+    models["Qwen2.5-3B"] = ModelConfig(
+        name="Qwen2.5-3B",
+        num_layers=36,
+        d_model=2048,
+        num_heads=16,
+        num_kv_heads=8,        # GQA
+        d_ff=11008,
+        vocab_size=151936,
+    )
 
     models["Qwen2.5-7B"] = ModelConfig(
         name="Qwen2.5-7B",
@@ -789,6 +819,41 @@ def get_model_configs() -> dict[str, ModelConfig]:
         num_kv_heads=8,        # GQA
         d_ff=8192,
         vocab_size=200064,
+    )
+
+    # =========================================================================
+    # SmolLM2, Gemma-3, Falcon3  (grid sweep models)
+    # =========================================================================
+
+    models["SmolLM2-1.7B"] = ModelConfig(
+        name="SmolLM2-1.7B",
+        num_layers=24,
+        d_model=2048,
+        num_heads=32,
+        num_kv_heads=8,        # GQA
+        d_ff=8192,
+        vocab_size=49152,
+    )
+
+    models["Gemma-3-1B"] = ModelConfig(
+        name="Gemma-3-1B",
+        num_layers=18,
+        d_model=1152,
+        num_heads=4,
+        num_kv_heads=1,        # MQA
+        d_ff=6912,
+        vocab_size=262144,
+        head_dim=256,          # NOT d_model//num_heads
+    )
+
+    models["Falcon3-7B"] = ModelConfig(
+        name="Falcon3-7B",
+        num_layers=32,
+        d_model=3072,
+        num_heads=24,
+        num_kv_heads=8,        # GQA
+        d_ff=12288,
+        vocab_size=131072,
     )
 
     return models
