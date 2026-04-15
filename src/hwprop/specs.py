@@ -432,6 +432,21 @@ def get_hardware_specs() -> dict[str, HardwareSpec]:
         disk_bandwidth=5 * GB,
     )
 
+    specs["A40"] = HardwareSpec(
+        name="A40",
+        hbm_capacity=48 * GB,
+        hbm_bandwidth=696 * GB,        # 696 GB/s GDDR6
+        cpu_ram_capacity=256 * GB,
+        cpu_gpu_bandwidth=32 * GB,     # PCIe 4.0 x16
+        fp16_flops=149.7 * TFLOPS,    # with sparsity; ~75 TFLOPS dense
+        int8_flops=299.3 * TFLOPS,
+        fp32_flops=37.4 * TFLOPS,
+        sram_capacity=10 * (1 << 20),  # ~10.5 MB (84 SMs x 128 KB)
+        interconnect_bandwidth=0,       # no NVLink
+        disk_capacity=2 * TB,
+        disk_bandwidth=5 * GB,
+    )
+
     specs["RTX_5090"] = HardwareSpec(
         name="RTX_5090",
         hbm_capacity=32 * GB,          # 32 GB GDDR7
