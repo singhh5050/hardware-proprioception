@@ -269,9 +269,9 @@ The model is simple. Three terms, each with a clear physical interpretation. t_l
 
 ## Slide 13: Universal Calibration — Fitting the Constants
 
-**FIGURE: `results/plots/slides_crossval_loo_gpu.png`**
+**FIGURES: `results/plots/slides_calibration_heatmap.png` | `results/plots/slides_crossval_loo_gpu.png`**
 
-Per-GPU scatter: universal equation predicted vs measured. Each panel is one GPU.
+Left heatmap: MAE per (GPU, model) for roofline vs universal equation. Right: per-GPU scatter.
 
 **Two universal constants** (α, β) + one per-GPU constant (t_launch) + hardware specs from spec sheets.
 

@@ -488,3 +488,124 @@ plt.close(fig)
 print(f"  Saved {OUT / 'slides_crossval_loo_gpu.png'}")
 
 print("\nDone. All figures saved to results/plots/")
+
+
+# ===========================================================================
+# Figure 6: Per-GPU × per-model calibration heatmap
+# ===========================================================================
+print("Generating slides_calibration_heatmap.png ...")
+
+from scipy.stats import spearmanr as _spearmanr
+
+GPUS_ORDER  = ["H200", "H100_SXM", "A100_80GB", "L40S", "A40"]
+GPU_DISPLAY = {"H200": "H200", "H100_SXM": "H100\nSXM", "A100_80GB": "A100\n80GB",
+               "L40S": "L40S", "A40": "A40"}
+
+# Compute short model names and sort by param size (approx)
+MODEL_SIZE_ORDER = [
+    "gemma-3-1b-it", "Llama-3.2-1B", "Qwen2.5-1.5B-Instruct", "SmolLM2-1.7B-Instruct",
+    "Llama-3.2-3B", "Qwen2.5-3B-Instruct", "Falcon3-7B-Base", "Qwen2.5-7B-Instruct", "phi-4",
+]
+MODEL_DISPLAY = {
+    "gemma-3-1b-it": "Gemma-3-1B",
+    "Llama-3.2-1B": "LLaMA-3.2-1B",
+    "Qwen2.5-1.5B-Instruct": "Qwen2.5-1.5B",
+    "SmolLM2-1.7B-Instruct": "SmolLM2-1.7B",
+    "Llama-3.2-3B": "LLaMA-3.2-3B",
+    "Qwen2.5-3B-Instruct": "Qwen2.5-3B",
+    "Falcon3-7B-Base": "Falcon3-7B",
+    "Qwen2.5-7B-Instruct": "Qwen2.5-7B",
+    "phi-4": "Phi-4-14B",
+}
+
+def compute_mae(rows):
+    errs = [abs(r["_pred"] - r["mean_ms_per_token"]) / r["mean_ms_per_token"] for r in rows]
+    return np.mean(errs) * 100 if errs else np.nan
+
+def compute_rho(rows):
+    if len(rows) < 3:
+        return np.nan
+    pred = [r["_pred"] for r in rows]
+    meas = [r["mean_ms_per_token"] for r in rows]
+    r, _ = _spearmanr(pred, meas)
+    return r
+
+# Build per-(gpu, model) results for both methods
+results_roof = {}  # (gpu, model_short) -> mae
+results_univ = {}
+
+for r in CONTEXT_ROWS:
+    hw = r["hardware_key"]
+    if hw not in GPUS_ORDER:
+        continue
+    mshort = r.get("model_name", "?").split("/")[-1]
+
+    r_roof = roofline_only_ms(r)
+    r_univ = universal_ms(r)
+
+    key = (hw, mshort)
+    results_roof.setdefault(key, [])
+    results_univ.setdefault(key, [])
+    if r_roof is not None:
+        results_roof[key].append({**r, "_pred": r_roof})
+    if r_univ is not None:
+        results_univ[key].append({**r, "_pred": r_univ})
+
+# Build MAE matrices
+nG, nM = len(GPUS_ORDER), len(MODEL_SIZE_ORDER)
+mae_roof = np.full((nM, nG), np.nan)
+mae_univ = np.full((nM, nG), np.nan)
+
+for gi, gpu in enumerate(GPUS_ORDER):
+    for mi, model in enumerate(MODEL_SIZE_ORDER):
+        key = (gpu, model)
+        if key in results_roof and results_roof[key]:
+            mae_roof[mi, gi] = compute_mae(results_roof[key])
+        if key in results_univ and results_univ[key]:
+            mae_univ[mi, gi] = compute_mae(results_univ[key])
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5.5))
+
+model_labels = [MODEL_DISPLAY.get(m, m) for m in MODEL_SIZE_ORDER]
+gpu_labels   = [GPU_DISPLAY[g] for g in GPUS_ORDER]
+
+for ax, mat, title in [
+    (ax1, mae_roof, "Naive Roofline — MAE (%)"),
+    (ax2, mae_univ, "Universal Equation — MAE (%)"),
+]:
+    im = ax.imshow(mat, aspect="auto", cmap="RdYlGn_r", vmin=0, vmax=100)
+    ax.set_xticks(range(nG))
+    ax.set_xticklabels(gpu_labels, fontsize=9)
+    ax.set_yticks(range(nM))
+    ax.set_yticklabels(model_labels, fontsize=9)
+    ax.set_title(title, fontsize=11, fontweight="bold")
+
+    # Annotate cells
+    for mi in range(nM):
+        for gi in range(nG):
+            val = mat[mi, gi]
+            if not np.isnan(val):
+                color = "white" if val > 60 else "black"
+                ax.text(gi, mi, f"{val:.0f}%", ha="center", va="center",
+                        fontsize=8, color=color, fontweight="bold")
+
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="MAE (%)")
+
+# Add model size annotations on left panel
+for mi, model in enumerate(MODEL_SIZE_ORDER):
+    size_str = {
+        "gemma-3-1b-it": "1B", "Llama-3.2-1B": "1B", "Qwen2.5-1.5B-Instruct": "1.5B",
+        "SmolLM2-1.7B-Instruct": "1.7B", "Llama-3.2-3B": "3B", "Qwen2.5-3B-Instruct": "3B",
+        "Falcon3-7B-Base": "7B", "Qwen2.5-7B-Instruct": "7B", "phi-4": "14B",
+    }.get(model, "")
+    ax1.text(-0.7, mi, size_str, ha="right", va="center", fontsize=8, color="#555555")
+
+ax1.text(-1.2, -0.8, "Size", ha="right", va="center", fontsize=8, color="#555555",
+         fontstyle="italic")
+
+fig.suptitle("Per-GPU × Per-Model Calibration Results — Context Sweep (bs=1, full_cache)",
+             fontsize=12, fontweight="bold")
+fig.tight_layout()
+fig.savefig(OUT / "slides_calibration_heatmap.png", dpi=180, bbox_inches="tight")
+plt.close(fig)
+print(f"  Saved {OUT / 'slides_calibration_heatmap.png'}")
