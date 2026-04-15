@@ -237,20 +237,29 @@ def run_simulation(
     decode_steps: int,
     batch_size: int = 1,
 ) -> dict:
-    """Run simulator (roofline + overhead correction) for full_cache at given context length."""
+    """Run LLMSimulator (roofline + overhead correction) for full_cache.
+
+    Uses calibrated overhead profiles when available (H100_SXM, A100_40GB, GH200),
+    falls back to for_hardware() derivation for other hardware.
+    """
     from hwprop.simulator import simulate_latency
 
     result = simulate_latency(
         hardware=hardware_key,
         model=model_key,
-        strategy="full_cache",
+        strategy=None,  # full_cache
         prompt_len=prompt_len,
         decode_steps=decode_steps,
         batch_size=batch_size,
     )
-    # mean_per_token_ms = per-step ms / batch_size; recover per-step for the CSV
+    # mean_per_token_ms divides by batch_size internally; recover per-step for CSV
     mean_per_step_ms = result.mean_per_token_ms * batch_size
-    return {"mean_latency_ms": mean_per_step_ms}
+    return {
+        "mean_latency_ms": mean_per_step_ms,
+        "total_time_s": result.total_time_s,
+        "prefill_time_s": result.prefill_time_s,
+        "overhead_name": result.overhead_name,
+    }
 
 
 # ---------------------------------------------------------------------------
