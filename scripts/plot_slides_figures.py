@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from hwprop.specs import get_hardware_specs
 from hwprop.universal_fit import ALPHA, BETA, LAUNCH_OVERHEADS, predict_step_ms
+from hwprop.simulator import simulate_latency as _sim_latency
 
 OUT = Path("results/plots")
 OUT.mkdir(parents=True, exist_ok=True)
@@ -99,6 +100,41 @@ def universal_ms(row: dict) -> float | None:
         context_length=row["context_length"],
         t_launch=LAUNCH_OVERHEADS.get(hw, 0.020),
     )
+
+
+# Map benchmark model short names → LLMSimulator model keys
+_SIM_MODEL_MAP: dict[str, str] = {
+    "gemma-3-1b-it":          "Gemma-3-1B",
+    "Llama-3.2-1B":           "LLaMA-3.2-1B",
+    "Qwen2.5-1.5B-Instruct":  "Qwen2.5-1.5B",
+    "SmolLM2-1.7B-Instruct":  "SmolLM2-1.7B",
+    "Llama-3.2-3B":           "LLaMA-3.2-3B",
+    "Qwen2.5-3B-Instruct":    "Qwen2.5-3B",
+    "Falcon3-7B-Base":        "Falcon3-7B",
+    "Qwen2.5-7B-Instruct":    "Qwen2.5-7B",
+    "phi-4":                  "Phi-4-14B",
+}
+
+# Cache: (hw_key, sim_model_key, context_length) -> ms
+_llmsim_cache: dict[tuple, float] = {}
+
+def llmsim_ms(row: dict) -> float | None:
+    """LLMSimulator prediction: one decode step at the given context length."""
+    hw = row["hardware_key"]
+    mshort = row.get("model_name", "").split("/")[-1]
+    sim_model = _SIM_MODEL_MAP.get(mshort)
+    if sim_model is None or hw not in BW:
+        return None
+    ctx = row["context_length"]
+    key = (hw, sim_model, ctx)
+    if key not in _llmsim_cache:
+        try:
+            result = _sim_latency(hw, sim_model, prompt_len=ctx, decode_steps=1)
+            _llmsim_cache[key] = result.mean_per_token_ms
+        except Exception:
+            _llmsim_cache[key] = float("nan")
+    val = _llmsim_cache[key]
+    return None if (val != val) else val  # NaN check
 
 
 # ===========================================================================
@@ -530,10 +566,12 @@ def compute_rho(rows):
     r, _ = _spearmanr(pred, meas)
     return r
 
-# Build per-(gpu, model) results for both methods
-results_roof = {}  # (gpu, model_short) -> mae
+# Build per-(gpu, model) results for all three methods
+results_roof = {}  # (gpu, model_short) -> list of rows with _pred
 results_univ = {}
+results_sim  = {}
 
+print("  Pre-computing LLMSimulator predictions (this may take ~30s)...")
 for r in CONTEXT_ROWS:
     hw = r["hardware_key"]
     if hw not in GPUS_ORDER:
@@ -542,19 +580,24 @@ for r in CONTEXT_ROWS:
 
     r_roof = roofline_only_ms(r)
     r_univ = universal_ms(r)
+    r_sim  = llmsim_ms(r)
 
     key = (hw, mshort)
     results_roof.setdefault(key, [])
     results_univ.setdefault(key, [])
+    results_sim.setdefault(key, [])
     if r_roof is not None:
         results_roof[key].append({**r, "_pred": r_roof})
     if r_univ is not None:
         results_univ[key].append({**r, "_pred": r_univ})
+    if r_sim is not None:
+        results_sim[key].append({**r, "_pred": r_sim})
 
 # Build MAE matrices
 nG, nM = len(GPUS_ORDER), len(MODEL_SIZE_ORDER)
 mae_roof = np.full((nM, nG), np.nan)
 mae_univ = np.full((nM, nG), np.nan)
+mae_sim  = np.full((nM, nG), np.nan)
 
 for gi, gpu in enumerate(GPUS_ORDER):
     for mi, model in enumerate(MODEL_SIZE_ORDER):
@@ -563,15 +606,18 @@ for gi, gpu in enumerate(GPUS_ORDER):
             mae_roof[mi, gi] = compute_mae(results_roof[key])
         if key in results_univ and results_univ[key]:
             mae_univ[mi, gi] = compute_mae(results_univ[key])
+        if key in results_sim and results_sim[key]:
+            mae_sim[mi, gi] = compute_mae(results_sim[key])
 
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5.5))
+fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5.5))
 
 model_labels = [MODEL_DISPLAY.get(m, m) for m in MODEL_SIZE_ORDER]
 gpu_labels   = [GPU_DISPLAY[g] for g in GPUS_ORDER]
 
 for ax, mat, title in [
     (ax1, mae_roof, "Naive Roofline — MAE (%)"),
-    (ax2, mae_univ, "Universal Equation — MAE (%)"),
+    (ax2, mae_sim,  "LLMSimulator — MAE (%)"),
+    (ax3, mae_univ, "Universal Equation — MAE (%)"),
 ]:
     im = ax.imshow(mat, aspect="auto", cmap="RdYlGn_r", vmin=0, vmax=100)
     ax.set_xticks(range(nG))
@@ -591,13 +637,14 @@ for ax, mat, title in [
 
     plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="MAE (%)")
 
-# Add model size annotations on left panel
+# Add model size annotations on leftmost panel
+SIZE_MAP = {
+    "gemma-3-1b-it": "1B", "Llama-3.2-1B": "1B", "Qwen2.5-1.5B-Instruct": "1.5B",
+    "SmolLM2-1.7B-Instruct": "1.7B", "Llama-3.2-3B": "3B", "Qwen2.5-3B-Instruct": "3B",
+    "Falcon3-7B-Base": "7B", "Qwen2.5-7B-Instruct": "7B", "phi-4": "14B",
+}
 for mi, model in enumerate(MODEL_SIZE_ORDER):
-    size_str = {
-        "gemma-3-1b-it": "1B", "Llama-3.2-1B": "1B", "Qwen2.5-1.5B-Instruct": "1.5B",
-        "SmolLM2-1.7B-Instruct": "1.7B", "Llama-3.2-3B": "3B", "Qwen2.5-3B-Instruct": "3B",
-        "Falcon3-7B-Base": "7B", "Qwen2.5-7B-Instruct": "7B", "phi-4": "14B",
-    }.get(model, "")
+    size_str = SIZE_MAP.get(model, "")
     ax1.text(-0.7, mi, size_str, ha="right", va="center", fontsize=8, color="#555555")
 
 ax1.text(-1.2, -0.8, "Size", ha="right", va="center", fontsize=8, color="#555555",
